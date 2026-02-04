@@ -1,0 +1,677 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Ain Dubai: Click Cabins + Height-Time Plot</title>
+  <style>
+    :root{
+      --bg:#0b1220;
+      --panel:#0f1a30;
+      --text:#e6edf7;
+      --muted:#a8b6d1;
+      --grid:#223455;
+      --axis:#d5e7ff;
+      --white: rgba(255,255,255,0.92);
+    }
+    body{
+      margin:0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif;
+      background: radial-gradient(1200px 700px at 30% 15%, #152a57 0%, var(--bg) 55%, #060a12 100%);
+      color:var(--text);
+    }
+    header{
+      padding:14px 16px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+    }
+    header h1{ margin:0 0 6px 0; font-size:18px; font-weight:800; }
+    header p{ margin:0; color:var(--muted); font-size:13px; line-height:1.35; }
+
+    .topbar{
+      display:flex;
+      gap:10px;
+      align-items:center;
+      flex-wrap:wrap;
+      padding:12px 16px 0 16px;
+    }
+    button{
+      background: linear-gradient(180deg, #1f3b72 0%, #162a52 100%);
+      color: var(--text);
+      border: 1px solid rgba(255,255,255,0.14);
+      padding:10px 12px;
+      border-radius: 10px;
+      cursor:pointer;
+      font-weight:700;
+      letter-spacing:0.2px;
+    }
+    button:hover{ filter: brightness(1.08); }
+    button:active{ transform: translateY(1px); }
+    button[disabled]{ opacity:0.55; cursor:not-allowed; }
+    .accent{
+      background: linear-gradient(180deg, #ffb347 0%, #ff9f1c 100%);
+      color:#1b1204;
+      border-color: rgba(0,0,0,0.25);
+    }
+
+    .status{
+      color: var(--muted);
+      font-size: 13px;
+      margin-left: 6px;
+    }
+    .status strong{ color: var(--text); }
+
+    .stage{
+      display:grid;
+      grid-template-columns: 1fr 1fr;
+      gap:14px;
+      padding:12px 14px 16px 14px;
+    }
+    .panel{
+      background: rgba(15,26,48,0.72);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 14px;
+      padding:10px;
+      box-shadow: 0 8px 30px rgba(0,0,0,0.25);
+    }
+    .panel h2{
+      margin: 6px 8px 10px 8px;
+      font-size: 14px;
+      color: var(--muted);
+      font-weight:800;
+      letter-spacing:0.2px;
+    }
+    canvas{
+      width:100%;
+      height:auto;
+      display:block;
+      border-radius: 12px;
+      background: rgba(0,0,0,0.10);
+    }
+
+    @media (max-width: 1000px){
+      .stage{ grid-template-columns: 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Ain Dubai — Click cabins to select • 48 cabins • 250 m tall • 1 rev/hour (simulated at 60×)</h1>
+    <p>
+      Click cabin dots on the wheel to toggle selection, then press <strong>Start</strong>.
+      The animation completes one full revolution in <strong>1 minute</strong>. The graph plots <strong>height (m)</strong> vs <strong>time (min)</strong>.
+      Lowest cabin is <strong>10 m</strong> above ground.
+    </p>
+  </header>
+
+  <div class="topbar">
+    <button id="startBtn" class="accent" disabled>Start</button>
+    <button id="resetBtn" disabled>Reset</button>
+    <button id="clearBtn">Clear selection</button>
+    <span class="status">
+      Selected: <strong id="selCount">0</strong> • Time: <strong id="tRead">0.00</strong> min
+    </span>
+  </div>
+
+  <div class="stage">
+    <div class="panel">
+      <h2>Select Cabins</h2>
+      <canvas id="wheel" width="720" height="520"></canvas>
+    </div>
+
+    <div class="panel">
+      <h2>Height against Time</h2>
+      <canvas id="plot" width="720" height="520"></canvas>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // -----------------------------
+  // Polyfill: roundRect (safe in all browsers)
+  // -----------------------------
+  if (!CanvasRenderingContext2D.prototype.roundRect) {
+    CanvasRenderingContext2D.prototype.roundRect = function (x, y, w, h, r) {
+      const min = Math.min(w, h);
+      r = Math.min(r, min / 2);
+      this.beginPath();
+      this.moveTo(x + r, y);
+      this.arcTo(x + w, y, x + w, y + h, r);
+      this.arcTo(x + w, y + h, x, y + h, r);
+      this.arcTo(x, y + h, x, y, r);
+      this.arcTo(x, y, x + w, y, r);
+      this.closePath();
+      return this;
+    };
+  }
+
+  // -----------------------------
+  // Parameters (Ain Dubai model)
+  // -----------------------------
+  const N = 48;
+  const DIAMETER = 250;              // metres
+  const R = DIAMETER / 2;            // 125 m
+  const CLEARANCE = 10;              // lowest cabin is 10 m above ground
+  const BASE = CLEARANCE + R;        // wheel centre height = 10 + 125 = 135 m
+  const REV_TIME_MIN = 1.0;          // 1 revolution per minute (animation)
+  const omega = 2 * Math.PI / REV_TIME_MIN;
+
+  const Y_MAX = 300;                 // vertical axis range on plot
+
+  const phi = Array.from({length:N}, (_,k) => 2*Math.PI*k/N);
+
+  // -----------------------------
+  // Random-but-not-rainbow colours (stable per load)
+  // - Random HSL with muted saturation & mid lightness
+  // - One unique colour per cabin index
+  // -----------------------------
+  function mulberry32(seed){
+    return function() {
+      let t = seed += 0x6D2B79F5;
+      t = Math.imul(t ^ (t >>> 15), t | 1);
+      t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+      return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+  }
+  function hslToHex(h, s, l){
+    // h: 0..360, s/l: 0..100
+    s /= 100; l /= 100;
+    const c = (1 - Math.abs(2*l - 1)) * s;
+    const hp = h / 60;
+    const x = c * (1 - Math.abs((hp % 2) - 1));
+    let r=0,g=0,b=0;
+    if (0<=hp && hp<1){ r=c; g=x; b=0; }
+    else if (1<=hp && hp<2){ r=x; g=c; b=0; }
+    else if (2<=hp && hp<3){ r=0; g=c; b=x; }
+    else if (3<=hp && hp<4){ r=0; g=x; b=c; }
+    else if (4<=hp && hp<5){ r=x; g=0; b=c; }
+    else if (5<=hp && hp<6){ r=c; g=0; b=x; }
+    const m = l - c/2;
+    r = Math.round((r+m)*255);
+    g = Math.round((g+m)*255);
+    b = Math.round((b+m)*255);
+    return "#" + [r,g,b].map(v => v.toString(16).padStart(2,"0")).join("");
+  }
+
+  // Create seed (random per reload)
+  const seedArr = new Uint32Array(1);
+  (crypto?.getRandomValues?.(seedArr)) || (seedArr[0] = (Date.now() >>> 0));
+  const rand = mulberry32(seedArr[0]);
+
+  // Generate colours (muted, not evenly-spaced / not a rainbow)
+  const cabinColor = Array.from({length:N}, () => {
+    const h = Math.floor(rand() * 360);           // random hue
+    const s = 42 + Math.floor(rand() * 26);       // 42..67 (muted)
+    const l = 48 + Math.floor(rand() * 18);       // 48..65 (mid light)
+    return hslToHex(h, s, l);
+  });
+
+  // -----------------------------
+  // DOM
+  // -----------------------------
+  const wheel = document.getElementById("wheel");
+  const plot  = document.getElementById("plot");
+  const wctx  = wheel.getContext("2d");
+  const pctx  = plot.getContext("2d");
+
+  const startBtn = document.getElementById("startBtn");
+  const resetBtn = document.getElementById("resetBtn");
+  const clearBtn = document.getElementById("clearBtn");
+  const selCount = document.getElementById("selCount");
+  const tRead    = document.getElementById("tRead");
+
+  // -----------------------------
+  // High-DPI scaling: use actual displayed size via getBoundingClientRect()
+  // (prevents weird scaling / blank draws on some layouts)
+  // -----------------------------
+  function fitCanvas(canvas, ctx){
+    const dpr = Math.max(1, window.devicePixelRatio || 1);
+    const rect = canvas.getBoundingClientRect();
+    const w = Math.max(2, Math.round(rect.width));
+    const h = Math.max(2, Math.round(rect.height));
+    const bw = Math.round(w * dpr);
+    const bh = Math.round(h * dpr);
+    if (canvas.width !== bw || canvas.height !== bh){
+      canvas.width = bw;
+      canvas.height = bh;
+    }
+    ctx.setTransform(dpr,0,0,dpr,0,0); // draw in CSS pixels
+    return {w, h, dpr};
+  }
+
+  // -----------------------------
+  // State
+  // -----------------------------
+  const selected = new Set();         // cabin indices 0..47
+  let running = false;
+  let startTS = 0;
+
+  // trails: idx -> array of {t,h}
+  const trails = new Map();
+
+  // cabin points for click hit-testing (screen coords)
+  let cabinScreenPts = []; // [{x,y,idx}, ...]
+
+  // Sampling to avoid "big jumps"
+  // fixed step in minutes: 0.1 s = 0.1/60 min = 1/600 min
+  const sampleStep = 1 / 600;
+  let lastSampleT = 0;
+
+  // -----------------------------
+  // Maths helpers
+  // -----------------------------
+  function heightAt(tMin, idx){
+    // h(t) = (CLEARANCE + R) + R*sin(2πt + φk)
+    return BASE + R * Math.sin(omega * tMin + phi[idx]);
+  }
+  function cabinPosMeters(tMin, idx){
+    const ang = omega * tMin + phi[idx];
+    return { x: R * Math.cos(ang), y: R * Math.sin(ang) }; // y relative to wheel center
+  }
+
+  // -----------------------------
+  // Wheel geometry (in CSS pixels)
+  // Ground line represents height 0 m
+  // Bottom of wheel is at height CLEARANCE m
+  // -----------------------------
+  function wheelGeom(W,H){
+    const pad = 36;
+    const groundY = H - pad;
+    const cx = W * 0.50;
+    const scale = Math.min((W - 2*pad) / (2*R), (H - 2*pad) / (2*R)) * 0.92;
+
+    // centre y so that the lowest point is CLEARANCE metres above ground
+    // wheel centre height in metres = BASE
+    // pixel centre y = groundY - BASE*scale
+    const cy = groundY - BASE * scale;
+
+    return {W,H,pad,groundY,cx,cy,scale};
+  }
+
+  // -----------------------------
+  // Draw: Wheel
+  // -----------------------------
+  function drawWheel(tMin){
+    const {w:W, h:H} = fitCanvas(wheel, wctx);
+    const {pad,groundY,cx,cy,scale} = wheelGeom(W,H);
+
+    wctx.clearRect(0,0,W,H);
+
+    // Subtle grid
+    wctx.save();
+    wctx.globalAlpha = 0.25;
+    wctx.strokeStyle = "#1b2a47";
+    wctx.lineWidth = 1;
+    for (let x=0; x<=W; x+=40){ wctx.beginPath(); wctx.moveTo(x,0); wctx.lineTo(x,H); wctx.stroke(); }
+    for (let y=0; y<=H; y+=40){ wctx.beginPath(); wctx.moveTo(0,y); wctx.lineTo(W,y); wctx.stroke(); }
+    wctx.restore();
+
+    // Ground line (height 0 m)
+    wctx.save();
+    wctx.strokeStyle = "rgba(255,255,255,0.25)";
+    wctx.lineWidth = 3;
+    wctx.beginPath();
+    wctx.moveTo(pad, groundY);
+    wctx.lineTo(W-pad, groundY);
+    wctx.stroke();
+    wctx.restore();
+
+    // Label clearance marker
+    wctx.save();
+    wctx.strokeStyle = "rgba(255,255,255,0.18)";
+    wctx.setLineDash([5,6]);
+    wctx.lineWidth = 2;
+    const clearanceY = groundY - CLEARANCE * scale;
+    wctx.beginPath();
+    wctx.moveTo(pad, clearanceY);
+    wctx.lineTo(W-pad, clearanceY);
+    wctx.stroke();
+    wctx.setLineDash([]);
+    wctx.fillStyle = "rgba(230,237,247,0.85)";
+    wctx.font = "12px system-ui, Segoe UI, Arial";
+    wctx.fillText(`10 m clearance`, pad + 8, clearanceY - 8);
+    wctx.restore();
+
+    // Wheel circle
+    wctx.save();
+    wctx.strokeStyle = "rgba(255,255,255,0.90)";
+    wctx.lineWidth = 3;
+    wctx.beginPath();
+    wctx.arc(cx, cy, R*scale, 0, 2*Math.PI);
+    wctx.stroke();
+    wctx.restore();
+
+    // Hub
+    wctx.save();
+    wctx.fillStyle = "rgba(255,255,255,0.9)";
+    wctx.beginPath();
+    wctx.arc(cx, cy, 6, 0, 2*Math.PI);
+    wctx.fill();
+    wctx.restore();
+
+    // Spokes (every 4 cabins)
+    wctx.save();
+    wctx.strokeStyle = "rgba(255,255,255,0.18)";
+    wctx.lineWidth = 2;
+    for (let k=0; k<N; k+=4){
+      const {x,y} = cabinPosMeters(0, k);
+      wctx.beginPath();
+      wctx.moveTo(cx, cy);
+      wctx.lineTo(cx + x*scale, cy - y*scale);
+      wctx.stroke();
+    }
+    wctx.restore();
+
+    // Cabins (store screen pts for click selection)
+    cabinScreenPts = [];
+    for (let k=0; k<N; k++){
+      const {x,y} = cabinPosMeters(tMin, k);
+      const sx = cx + x*scale;
+      const sy = cy - y*scale;
+      cabinScreenPts.push({x:sx, y:sy, idx:k});
+
+      const isSel = selected.has(k);
+      const rDot  = isSel ? 7 : 5;
+
+      // Cabin dot in unique colour
+      wctx.save();
+      wctx.fillStyle = cabinColor[k];
+      wctx.globalAlpha = isSel ? 1.0 : 0.78;
+      wctx.beginPath();
+      wctx.arc(sx, sy, rDot, 0, 2*Math.PI);
+      wctx.fill();
+
+      // Selected outline + label
+      if (isSel){
+        wctx.globalAlpha = 1.0;
+        wctx.strokeStyle = "rgba(255,255,255,0.9)";
+        wctx.lineWidth = 2;
+        wctx.beginPath();
+        wctx.arc(sx, sy, rDot+1.2, 0, 2*Math.PI);
+        wctx.stroke();
+
+        wctx.font = "12px system-ui, Segoe UI, Arial";
+        wctx.fillStyle = "rgba(255,255,255,0.92)";
+        wctx.fillText(`${k+1}`, sx + 9, sy - 9);
+      }
+      wctx.restore();
+    }
+
+    // Info box
+    wctx.save();
+    wctx.fillStyle = "rgba(0,0,0,0.35)";
+    wctx.strokeStyle = "rgba(255,255,255,0.12)";
+    wctx.lineWidth = 1;
+    wctx.roundRect(12, 12, 330, 70, 12);
+    wctx.fill();
+    wctx.stroke();
+    wctx.fillStyle = "rgba(230,237,247,0.92)";
+    wctx.font = "13px system-ui, Segoe UI, Arial";
+    wctx.fillText(`t = ${tMin.toFixed(2)} min`, 24, 38);
+    wctx.fillText(`Height range: 10 m → 260 m`, 24, 58);
+    wctx.fillText(`1 revolution in 1.00 min (60× speed)`, 24, 78);
+    wctx.restore();
+  }
+
+  // -----------------------------
+  // Draw: Plot (axes 0..1 min, 0..300 m)
+  // -----------------------------
+  function drawPlot(tMin){
+    const {w:W, h:H} = fitCanvas(plot, pctx);
+    pctx.clearRect(0,0,W,H);
+
+    const m = {l: 66, r: 18, t: 20, b: 56};
+    const x0 = m.l, y0 = H - m.b;
+    const x1 = W - m.r, y1 = m.t;
+    const pw = x1 - x0, ph = y0 - y1;
+
+    // Grid
+    pctx.save();
+    pctx.strokeStyle = "rgba(34,52,85,0.85)";
+    pctx.lineWidth = 1;
+
+    // vertical grid: 0..1 in 0.1
+    for (let i=0;i<=10;i++){
+      const x = x0 + pw*(i/10);
+      pctx.beginPath(); pctx.moveTo(x,y0); pctx.lineTo(x,y1); pctx.stroke();
+    }
+    // horizontal grid: 0..300 in 30 steps of 10? too dense; use 0..300 in 25m => 12 lines
+    const gridStep = 25;
+    for (let h=0; h<=Y_MAX; h+=gridStep){
+      const y = y0 - ph*(h/Y_MAX);
+      pctx.beginPath(); pctx.moveTo(x0,y); pctx.lineTo(x1,y); pctx.stroke();
+    }
+    pctx.restore();
+
+    // Axes
+    pctx.save();
+    pctx.strokeStyle = "rgba(213,231,255,0.95)";
+    pctx.lineWidth = 2;
+    pctx.beginPath(); pctx.moveTo(x0,y0); pctx.lineTo(x0,y1); pctx.stroke();
+    pctx.beginPath(); pctx.moveTo(x0,y0); pctx.lineTo(x1,y0); pctx.stroke();
+    pctx.restore();
+
+    // Labels
+    pctx.save();
+    pctx.fillStyle = "rgba(230,237,247,0.92)";
+    pctx.font = "12px system-ui, Segoe UI, Arial";
+
+    // x ticks: 0..1 in 0.2
+    for (let i=0;i<=5;i++){
+      const tt = i/5;
+      const x = x0 + pw*tt;
+      pctx.fillText(tt.toFixed(1), x-10, y0+20);
+    }
+    pctx.fillText("Time (hours)", x0 + pw/2 - 44, H - 18);
+
+    // y ticks: 0..300 in 50
+    for (let h=0; h<=Y_MAX; h+=50){
+      const y = y0 - ph*(h/Y_MAX);
+      pctx.fillText(String(h), 24, y+4);
+    }
+    // y label
+    pctx.translate(16, y1 + ph/2 + 40);
+    pctx.rotate(-Math.PI/2);
+    pctx.fillText("Height (m)", 0, 0);
+    pctx.restore();
+
+    // Converters
+    const tx = (t) => x0 + pw*(t/REV_TIME_MIN);
+    const hy = (h) => y0 - ph*(h/Y_MAX);
+
+    // Selected in consistent order
+    const selArr = Array.from(selected).sort((a,b)=>a-b);
+
+    // Trails + legend
+    let legendY = 28;
+    pctx.save();
+    pctx.font = "12px system-ui, Segoe UI, Arial";
+
+    selArr.forEach((idx) => {
+      const col = cabinColor[idx];
+      const pts = trails.get(idx) || [];
+
+      // trail
+      pctx.strokeStyle = col;
+      pctx.lineWidth = 2.2;
+      pctx.beginPath();
+      for (let j=0;j<pts.length;j++){
+        const p = pts[j];
+        const x = tx(p.t), y = hy(p.h);
+        if (j===0) pctx.moveTo(x,y);
+        else pctx.lineTo(x,y);
+      }
+      pctx.stroke();
+
+      // current dot
+      if (pts.length){
+        const last = pts[pts.length-1];
+        pctx.fillStyle = col;
+        pctx.beginPath();
+        pctx.arc(tx(last.t), hy(last.h), 4, 0, 2*Math.PI);
+        pctx.fill();
+      }
+
+      // legend
+      pctx.fillStyle = col;
+      pctx.fillRect(64, legendY - 10, 14, 8);
+      pctx.fillStyle = "rgba(230,237,247,0.95)";
+      pctx.fillText(`Cabin ${idx+1}`, 86, legendY);
+      legendY += 18;
+    });
+
+    // Current time marker
+    pctx.save();
+    pctx.strokeStyle = "rgba(255,255,255,0.55)";
+    pctx.lineWidth = 1.5;
+    pctx.setLineDash([6,6]);
+    const xNow = tx(tMin);
+    pctx.beginPath();
+    pctx.moveTo(xNow, y0);
+    pctx.lineTo(xNow, y1);
+    pctx.stroke();
+    pctx.restore();
+
+    pctx.restore();
+  }
+
+  function drawAll(tMin){
+    drawWheel(tMin);
+    drawPlot(tMin);
+  }
+
+  // -----------------------------
+  // Interaction: click cabins (hit test)
+  // -----------------------------
+  wheel.addEventListener("click", (ev) => {
+    if (running) return;
+
+    const rect = wheel.getBoundingClientRect();
+    const x = ev.clientX - rect.left;
+    const y = ev.clientY - rect.top;
+
+    // nearest cabin within threshold
+    let best = null;
+    let bestD2 = Infinity;
+    for (const p of cabinScreenPts){
+      const dx = x - p.x;
+      const dy = y - p.y;
+      const d2 = dx*dx + dy*dy;
+      if (d2 < bestD2){ bestD2 = d2; best = p; }
+    }
+    const threshold = 16; // px (a bit easier to click)
+    if (best && bestD2 <= threshold*threshold){
+      const idx = best.idx;
+      if (selected.has(idx)) selected.delete(idx);
+      else selected.add(idx);
+      updateUI();
+      drawAll(0);
+    }
+  });
+
+  // -----------------------------
+  // Buttons
+  // -----------------------------
+  clearBtn.addEventListener("click", () => {
+    if (running) return;
+    selected.clear();
+    updateUI();
+    trails.clear();
+    tRead.textContent = "0.00";
+    drawAll(0);
+  });
+
+  startBtn.addEventListener("click", () => {
+    if (running) return;
+    if (selected.size === 0) return;
+
+    trails.clear();
+    for (const idx of selected) trails.set(idx, []);
+
+    running = true;
+    startTS = performance.now();
+
+    // IMPORTANT: fixed sampling removes jumps
+    lastSampleT = 0;
+
+    // Seed trails with t=0 point (prevents an initial “gap”)
+    for (const idx of selected){
+      trails.get(idx).push({t: 0, h: heightAt(0, idx)});
+    }
+
+    startBtn.disabled = true;
+    clearBtn.disabled = true;
+    resetBtn.disabled = true;
+
+    requestAnimationFrame(step);
+  });
+
+  resetBtn.addEventListener("click", () => {
+    running = false;
+    trails.clear();
+    tRead.textContent = "0.00";
+    startBtn.disabled = selected.size === 0;
+    clearBtn.disabled = false;
+    resetBtn.disabled = true;
+    drawAll(0);
+  });
+
+  // -----------------------------
+  // Animation loop (fixed sampling to prevent “big jumps”)
+  // -----------------------------
+  function step(now){
+    if (!running) return;
+
+    const elapsed = now - startTS;
+    const tMin = Math.min(elapsed / 60000, REV_TIME_MIN);
+    tRead.textContent = tMin.toFixed(2);
+
+    // Fill in points at fixed steps up to current tMin
+    // (handles lag / tab switching without giant line segments)
+    while (lastSampleT + sampleStep < tMin - 1e-9){
+      lastSampleT += sampleStep;
+      for (const idx of selected){
+        trails.get(idx).push({t: lastSampleT, h: heightAt(lastSampleT, idx)});
+      }
+    }
+    // Always include the exact current time point (keeps marker aligned)
+    if (tMin > lastSampleT + 1e-9){
+      lastSampleT = tMin;
+      for (const idx of selected){
+        trails.get(idx).push({t: tMin, h: heightAt(tMin, idx)});
+      }
+    }
+
+    drawAll(tMin);
+
+    if (tMin >= REV_TIME_MIN - 1e-9){
+      running = false;
+      resetBtn.disabled = false;
+      clearBtn.disabled = false;
+      startBtn.disabled = selected.size === 0;
+      return;
+    }
+    requestAnimationFrame(step);
+  }
+
+  function updateUI(){
+    selCount.textContent = String(selected.size);
+    startBtn.disabled = (selected.size === 0) || running;
+    resetBtn.disabled = true;
+  }
+
+  window.addEventListener("resize", () => {
+    // redraw (either at 0 or at displayed time)
+    const t = running ? (Number(tRead.textContent)||0) : 0;
+    drawAll(t);
+  });
+
+  // -----------------------------
+  // Initial render
+  // -----------------------------
+  updateUI();
+  drawAll(0);
+
+})();
+</script>
+</body>
+</html>
