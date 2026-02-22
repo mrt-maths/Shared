@@ -561,7 +561,19 @@ let myViewBoardKey = "X"; // what I’m currently viewing
 let cachedState = null;
 let unsub = null;
 
+let joinInProgress = false;
+let lastRoomError = "";
+
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+function escapeHtml(str){
+  return String(str)
+    .replaceAll("&","&amp;")
+    .replaceAll("<","&lt;")
+    .replaceAll(">","&gt;")
+    .replaceAll('"',"&quot;")
+    .replaceAll("'","&#39;");
+}
 
 function defaultRoomState(){
   return {
@@ -748,13 +760,15 @@ function ensureRoom(roomId){
       return ref.set(state).then(()=>ref);
     }
     return ref;
-  });
+  }).catch(e=>{ throw new Error('RTDB get failed: ' + ((e&&e.message)||e)); });
 }
 
 function subscribeRoom(){
   if (!roomRef) return;
   roomRef.on("value", snap=>{
     cachedState = snap.val();
+    joinInProgress = false;
+    lastRoomError = "";
     // keep view sensible: if it's my turn, show my board; else show the other board (as requested)
     if (cachedState && (myRole==="A" || myRole==="B")){
       const info = computeMyTurnInfo(cachedState);
@@ -769,6 +783,11 @@ function subscribeRoom(){
       setView(myViewBoardKey || "X");
     }
     render();
+  }, err=>{
+    console.error("RTDB subscription error:", err);
+    joinInProgress = false;
+    lastRoomError = (err && err.message) ? err.message : String(err);
+    UI.status(`<div class="bad"><strong>Realtime Database permission error.</strong><br><span class="muted">${escapeHtml(lastRoomError)}</span></div>`);
   });
 }
 
@@ -961,7 +980,7 @@ function init(){
 
   document.getElementById("joinBtn").onclick = async ()=>{
     if (!firebaseOk){
-      alert("Firebase is not configured. Paste your config in the HTML first.");
+      alert("Firebase is not configured (or Firebase scripts failed to load).");
       return;
     }
     roomId = (document.getElementById("roomId").value || "").trim();
@@ -970,12 +989,45 @@ function init(){
       return;
     }
     myRole = document.getElementById("role").value;
-    // create/ensure room
-    roomRef = await ensureRoom(roomId);
-    // subscribe
-    roomRef.off();
-    subscribeRoom();
-    render();
+    joinInProgress = true;
+    lastRoomError = "";
+    cachedState = null;
+    UI.status(`<div class="muted">Joining room <strong>${roomId}</strong>…</div>`);
+
+    try{
+      // create/ensure room
+      roomRef = await ensureRoom(roomId);
+
+      // subscribe
+      roomRef.off();
+      subscribeRoom();
+
+      // If DB read is blocked, the value listener may never deliver state.
+      setTimeout(()=>{
+        if (joinInProgress && !cachedState && !lastRoomError){
+          UI.status(`<div class="bad"><strong>Connected to Firebase</strong>, but no room data arrived.</div>
+          <div class="small muted">Most likely your Realtime Database <strong>rules</strong> are blocking reads/writes.
+          In Firebase Console → Realtime Database → Rules, set temporary test rules:</div>
+          <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.12);margin-top:8px;">{
+  "rules": {
+    ".read": true,
+    ".write": true
+  }
+}</pre>
+          <div class="small muted" style="margin-top:8px;">Then reload and join again. (You can tighten rules later.)</div>`);
+        }
+      }, 2500);
+
+      render();
+    } catch(e){
+      console.error(e);
+      joinInProgress = false;
+      lastRoomError = (e && e.message) ? e.message : String(e);
+      UI.status(`<div class="bad"><strong>Could not join room.</strong><br><span class="muted">${escapeHtml(lastRoomError)}</span></div>`);
+      alert("Could not join room. Check your Realtime Database rules and the browser console for details.
+
+" + lastRoomError);
+    }
   };
 
   document.getElementById("undoButton").onclick = ()=>{
