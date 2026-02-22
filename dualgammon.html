@@ -144,12 +144,17 @@ function stripTransientState(obj) {
   return copy;
 }
 
-function prepareForWrite(value) {
+function window.prepareForWrite(value) {
   return sanitizeForFirebase(stripTransientState(value));
 }
 
 
 
+
+// Ensure global access (needed if script runs as module)
+window.prepareForWrite = prepareForWrite;
+window.stripTransientState = stripTransientState;
+window.sanitizeForFirebase = sanitizeForFirebase;
 // --- Firebase sanitiser (global) ---
 function sanitizeForFirebase(value) {
   if (value === undefined) return null;
@@ -228,17 +233,17 @@ function tryInitFirebase(){
         const _transaction = proto.transaction;
 
         proto.set = function(value, onComplete) {
-          return _set.call(this, prepareForWrite(value), onComplete);
+          return _set.call(this, window.prepareForWrite(value), onComplete);
         };
 
         proto.update = function(values, onComplete) {
-          return _update.call(this, prepareForWrite(values), onComplete);
+          return _update.call(this, window.prepareForWrite(values), onComplete);
         };
 
         proto.transaction = function(transactionUpdate, onComplete, applyLocally) {
           const wrapped = function(currentData) {
             const next = transactionUpdate(currentData);
-            return prepareForWrite(next);
+            return window.prepareForWrite(next);
           };
           return _transaction.call(this, wrapped, onComplete, applyLocally);
         };
