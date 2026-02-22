@@ -60,14 +60,16 @@
 
     <div id="side">
       <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
-        <input id="roomId" placeholder="Room code (e.g. DC13FM)" style="flex:1 1 160px;" />
+        <input id="roomId" placeholder="Room code: 514" style="flex:1 1 160px;"  value="514" inputmode="numeric" pattern="514" />
         <select id="role">
           <option value="A">Player A (Black)</option>
           <option value="B">Player B (White)</option>
           <option value="S">Spectator</option>
         </select>
         <button class="btn primary" id="joinBtn">Join</button>
-      </div>
+      
+      <div id="statusBanner" class="small" style="margin-top:8px; padding:8px 10px; border-radius:10px; background:rgba(255,255,255,0.06);">Status: <span id="statusMsg">Not joined</span></div>
+</div>
       <div class="small" style="margin-top:8px;">
         Two devices join the <strong>same room</strong>. Player A always plays <strong>Black</strong> (bearing off right). Player B always plays <strong>White</strong>.
         Dice are shared across both boards. After each turn, your view swaps to the other board automatically.
@@ -155,6 +157,7 @@ tryInitFirebase();
        ... alternates thereafter.
    ========================================================= */
 
+function setStatus(msg){ const el=document.getElementById("statusMsg"); if(el) el.textContent=msg; }
 let canvas, ctx;
 let mousePos;
 
@@ -561,19 +564,7 @@ let myViewBoardKey = "X"; // what I’m currently viewing
 let cachedState = null;
 let unsub = null;
 
-let joinInProgress = false;
-let lastRoomError = "";
-
 function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
-
-function escapeHtml(str){
-  return String(str)
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#39;");
-}
 
 function defaultRoomState(){
   return {
@@ -740,7 +731,7 @@ function render(){
    ========================================================= */
 function ensureRoom(roomId){
   const ref = db.ref("dualBackgammonRooms/"+roomId);
-  return ref.get().then(snap=>{
+  return ref.once("value").then(snap=>{
     if (!snap.exists()){
       const state = defaultRoomState();
       // opening roll: determine who starts on board X; same dice but reversed starter on Y.
@@ -760,15 +751,13 @@ function ensureRoom(roomId){
       return ref.set(state).then(()=>ref);
     }
     return ref;
-  }).catch(e=>{ throw new Error('RTDB get failed: ' + ((e&&e.message)||e)); });
+  });
 }
 
 function subscribeRoom(){
   if (!roomRef) return;
   roomRef.on("value", snap=>{
     cachedState = snap.val();
-    joinInProgress = false;
-    lastRoomError = "";
     // keep view sensible: if it's my turn, show my board; else show the other board (as requested)
     if (cachedState && (myRole==="A" || myRole==="B")){
       const info = computeMyTurnInfo(cachedState);
@@ -783,11 +772,6 @@ function subscribeRoom(){
       setView(myViewBoardKey || "X");
     }
     render();
-  }, err=>{
-    console.error("RTDB subscription error:", err);
-    joinInProgress = false;
-    lastRoomError = (err && err.message) ? err.message : String(err);
-    UI.status(`<div class="bad"><strong>Realtime Database permission error.</strong><br><span class="muted">${escapeHtml(lastRoomError)}</span></div>`);
   });
 }
 
@@ -972,6 +956,8 @@ function handleMouseclick(evt){
    INIT UI
    ========================================================= */
 function init(){
+  const roomEl = document.getElementById("roomId");
+  if (roomEl){ roomEl.value="514"; roomEl.disabled=true; roomEl.placeholder="Room code: 514"; }
   canvas = document.getElementById("myCanvas");
   ctx = canvas.getContext("2d");
 
@@ -979,54 +965,30 @@ function init(){
   canvas.addEventListener("click", handleMouseclick);
 
   document.getElementById("joinBtn").onclick = async ()=>{
+    setStatus("Joining room 514…");
     if (!firebaseOk){
-      alert("Firebase is not configured (or Firebase scripts failed to load).");
+      alert("Firebase is not configured. Paste your config in the HTML first.");
       return;
     }
-    roomId = (document.getElementById("roomId").value || "").trim();
-    if (!roomId){
-      alert("Enter a room code.");
-      return;
-    }
-    myRole = document.getElementById("role").value;
-    joinInProgress = true;
-    lastRoomError = "";
-    cachedState = null;
-    UI.status(`<div class="muted">Joining room <strong>${roomId}</strong>…</div>`);
-
     try{
-      // create/ensure room
-      roomRef = await ensureRoom(roomId);
 
-      // subscribe
-      roomRef.off();
-      subscribeRoom();
-
-      // If DB read is blocked, the value listener may never deliver state.
-      setTimeout(()=>{
-        if (joinInProgress && !cachedState && !lastRoomError){
-          UI.status(`<div class="bad"><strong>Connected to Firebase</strong>, but no room data arrived.</div>
-          <div class="small muted">Most likely your Realtime Database <strong>rules</strong> are blocking reads/writes.
-          In Firebase Console → Realtime Database → Rules, set temporary test rules:</div>
-          <pre style="white-space:pre-wrap;background:rgba(0,0,0,.25);padding:10px;border-radius:10px;border:1px solid rgba(255,255,255,.12);margin-top:8px;">{
-  "rules": {
-    ".read": true,
-    ".write": true
-  }
-}</pre>
-          <div class="small muted" style="margin-top:8px;">Then reload and join again. (You can tighten rules later.)</div>`);
-        }
-      }, 2500);
-
-      render();
-    } catch(e){
-      console.error(e);
-      joinInProgress = false;
-      lastRoomError = (e && e.message) ? e.message : String(e);
-      UI.status(`<div class="bad"><strong>Could not join room.</strong><br><span class="muted">${escapeHtml(lastRoomError)}</span></div>`);
-      alert("Could not join room. Check your Realtime Database rules and the browser console for details.
-
-" + lastRoomError);
+    roomId = "514";
+    const roomEl = document.getElementById("roomId");
+    if (roomEl){ roomEl.value = "514"; roomEl.disabled = true; roomEl.placeholder = "Room code: 514"; }
+    // Room code is fixed to 514
+myRole = document.getElementById("role").value;
+    // create/ensure room
+    roomRef = await ensureRoom(roomId);
+    setStatus(`Joined room ${roomId} as ${myRole}. Syncing…`);
+// subscribe
+    roomRef.off();
+    subscribeRoom();
+    render();
+  
+    }catch(e){
+      setStatus("Join failed: " + (e && e.message ? e.message : e));
+      alert("Join failed: " + (e && e.message ? e.message : e));
+      return;
     }
   };
 
