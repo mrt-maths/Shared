@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dual-Board Backgammon v1.6</title>
+  <title>Dual-Board Backgammon v1.7</title>
   <style>
     :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#f59e0b; --danger:#ef4444; --ok:#22c55e; }
     body{ margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:linear-gradient(180deg,#0b1023,#050814); color:var(--ink); }
@@ -854,7 +854,7 @@ function defaultRoomState(){
     createdAt: Date.now(),
     opening: { done:false, aWonX: null }, // aWonX: true/false
     cycle: 0,          // 0 = opening, then 1,2,3...
-    dice: { left: 6, right: 1 }, // rendered left/right (max/min like original opening)
+    dice: normalizeDice(Math.floor(Math.random()*6)+1, Math.floor(Math.random()*6)+1), // rendered left/right (max/min like original opening)
     boards: { X: makeFreshBoard(), Y: makeFreshBoard() },
     finished: { A:false, B:false }, // finished their move THIS cycle
     assignment: { A:"X", B:"Y" },    // which board each player plays THIS cycle (opening will set)
@@ -1105,6 +1105,37 @@ function maybeReinitIfNoPlayers(){
     return s;
   }).then(()=>{});
 }
+            
+// If both players are connected and opening hasn't been rolled yet, roll opening dice and initialise turns.
+function ensureOpeningIfReady(){
+  if (!roomRef) return Promise.resolve();
+  return roomRef.transaction(s=>{
+    if (!s) return s;
+    const pres = (s.presence || {});
+    const aOn = !!pres.A;
+    const bOn = !!pres.B;
+
+    if (s.opening && s.opening.done) return s;
+    if (!aOn || !bOn) return s;
+
+    let r1=0,r2=0;
+    while (r1===r2){ r1 = Math.floor(Math.random()*6)+1; r2 = Math.floor(Math.random()*6)+1; }
+    const dice = normalizeDice(r1,r2);
+
+    s.dice = dice;
+    s.opening = { done:true, aWonX: (r1>r2) };
+
+    // Opening assignment: winner plays Board X, other plays Board Y (same dice).
+    s.assignment = s.opening.aWonX ? {A:"X", B:"Y"} : {A:"Y", B:"X"};
+    s.finished = {A:false, B:false};
+
+    setBoardOnMoveFromAssignment(s);
+
+    s.lastMsg = `Opening roll: ${dice.left} and ${dice.right}. Board X starts with ` + (s.opening.aWonX ? "Player A (Black)" : "Player B (White)") + `; Board Y starts with the other player.`;
+    return s;
+  }).then(()=>{});
+}
+
 
 
 /* =========================================================
@@ -1315,7 +1346,10 @@ myRole = document.getElementById("role").value;
     // create/ensure room
     roomRef = await ensureRoom(roomId);
     await maybeReinitIfNoPlayers();
+    await ensureOpeningIfReady();
     setupPresence(myRole);
+    // If both players are now present, initialise opening roll.
+    await ensureOpeningIfReady();
     setStatus(`Joined room ${roomId} as ${myRole}. Syncing…`);
 // subscribe
     roomRef.off();
