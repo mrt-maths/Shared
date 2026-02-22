@@ -158,7 +158,35 @@ function tryInitFirebase(){
       return;
     }
     app = firebase.initializeApp(FIREBASE_CONFIG);
-    db = firebase.database();
+    
+
+// --- Monkey-patch RTDB writes to always sanitize (catches any .set/.update call) ---
+(function(){
+  try {
+    if (firebase && firebase.database && firebase.database.Reference && firebase.database.Reference.prototype) {
+      const proto = firebase.database.Reference.prototype;
+
+      if (!proto.__sanitize_patched__) {
+        const _set = proto.set;
+        const _update = proto.update;
+
+        proto.set = function(value, onComplete) {
+          return _set.call(this, sanitizeForFirebase(value), onComplete);
+        };
+
+        proto.update = function(values, onComplete) {
+          return _update.call(this, sanitizeForFirebase(values), onComplete);
+        };
+
+        proto.__sanitize_patched__ = true;
+      }
+    }
+  } catch (e) {
+    // if patching fails, writes may still work; errors will be shown by join status anyway
+  }
+})();
+
+db = firebase.database();
     firebaseOk = true;
     setConn("Connected", true);
   } catch(e){
@@ -215,7 +243,7 @@ function makeFreshBoard(){
     // undo backups:
     b:{},
     done:false,
-    mouseOverPoint: undefined,
+    mouseOverPoint: null,
     mouseOver: undefined
   };
   return brd;
