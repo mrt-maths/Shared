@@ -1,0 +1,1030 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Dual-Board Backgammon (2 Devices)</title>
+  <style>
+    :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#f59e0b; --danger:#ef4444; --ok:#22c55e; }
+    body{ margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:linear-gradient(180deg,#0b1023,#050814); color:var(--ink); }
+    #wrap{ display:flex; flex-direction:column; gap:12px; padding:12px; max-width:1200px; margin:0 auto; }
+    #topbar{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; justify-content:space-between; background:rgba(17,24,39,.8); border:1px solid rgba(255,255,255,.08); border-radius:14px; padding:10px 12px; }
+    #topbar .left, #topbar .right{ display:flex; flex-wrap:wrap; gap:10px; align-items:center; }
+    .chip{ padding:6px 10px; border-radius:999px; background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.08); font-size:13px; color:var(--muted); }
+    .chip strong{ color:var(--ink); font-weight:700; }
+    .btn{ cursor:pointer; border:1px solid rgba(255,255,255,.12); background:rgba(255,255,255,.06); color:var(--ink); padding:8px 12px; border-radius:10px; font-weight:650; }
+    .btn:hover{ border-color:rgba(255,255,255,.22); background:rgba(255,255,255,.09); }
+    .btn.primary{ background:rgba(245,158,11,.15); border-color:rgba(245,158,11,.35); }
+    .btn.primary:hover{ background:rgba(245,158,11,.22); }
+    .btn.danger{ background:rgba(239,68,68,.14); border-color:rgba(239,68,68,.35); }
+    input, select{
+      background:rgba(0,0,0,.25); border:1px solid rgba(255,255,255,.12); color:var(--ink);
+      padding:8px 10px; border-radius:10px; outline:none;
+    }
+    input::placeholder{ color:rgba(229,231,235,.45); }
+    #main{ display:flex; gap:12px; align-items:flex-start; }
+    #canvasCard{ flex: 1 1 auto; background:rgba(17,24,39,.75); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:10px; }
+    canvas{ width:100%; height:auto; display:block; border-radius:12px; background:#0b0f1e; }
+    #side{ width:330px; max-width:40vw; background:rgba(17,24,39,.75); border:1px solid rgba(255,255,255,.08); border-radius:16px; padding:12px; }
+    #statusInfo{ margin-top:10px; font-size:14px; line-height:1.35; color:var(--ink); }
+    #statusInfo .muted{ color:var(--muted); }
+    #statusInfo .ok{ color:var(--ok); }
+    #statusInfo .warn{ color:var(--accent); }
+    #statusInfo .bad{ color:var(--danger); }
+    #mousePos{ margin-top:10px; font-size:12px; color:var(--muted); }
+    .small{ font-size:12px; color:var(--muted); line-height:1.4; }
+    .hr{ height:1px; background:rgba(255,255,255,.08); margin:10px 0; }
+    .hidden{ display:none !important; }
+  </style>
+</head>
+
+<body>
+<div id="wrap">
+  <div id="topbar">
+    <div class="left">
+      <span class="chip"><strong>Dual-Board</strong> backgammon (X &amp; Y)</span>
+      <span class="chip" id="connChip">Connecting…</span>
+      <span class="chip" id="whoChip">Not joined</span>
+      <span class="chip" id="viewChip">View: —</span>
+    </div>
+    <div class="right">
+      <button class="btn" id="undoButton" disabled>Undo (this turn)</button>
+      <button class="btn danger" id="resetButton">Reset Room</button>
+    </div>
+  </div>
+
+  <div id="main">
+    <div id="canvasCard">
+      <canvas id="myCanvas">Your browser does not support canvas.</canvas>
+    </div>
+
+    <div id="side">
+      <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+        <input id="roomId" placeholder="Room code (e.g. DC13FM)" style="flex:1 1 160px;" />
+        <select id="role">
+          <option value="A">Player A (Black)</option>
+          <option value="B">Player B (White)</option>
+          <option value="S">Spectator</option>
+        </select>
+        <button class="btn primary" id="joinBtn">Join</button>
+      </div>
+      <div class="small" style="margin-top:8px;">
+        Two devices join the <strong>same room</strong>. Player A always plays <strong>Black</strong> (bearing off right). Player B always plays <strong>White</strong>.
+        Dice are shared across both boards. After each turn, your view swaps to the other board automatically.
+      </div>
+
+      <div class="hr"></div>
+
+      <div id="statusInfo"></div>
+      <div id="mousePos" class="hidden"></div>
+
+      <div class="hr"></div>
+      <div class="small">
+        <strong>Notes:</strong>
+        <ul style="margin:8px 0 0 18px; padding:0;">
+          <li>No doubling cube (disabled).</li>
+          <li>Click dice to end your turn once you have no legal moves left (or after using all moves).</li>
+          <li>Undo only works within your current turn.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase (Realtime Database) - you must add your own config below -->
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+
+<script>
+/*
+  ============================
+  SETUP: add your Firebase config
+  ============================
+  1) Create a Firebase project
+  2) Enable Realtime Database (test mode or with rules)
+  3) Paste your config object into FIREBASE_CONFIG below
+*/
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyCYOEkYrTfgXDuBz99sxAieeuXK5goBgpU",
+  authDomain: "mrt-class-6264c.firebaseapp.com",
+  databaseURL: "https://mrt-class-6264c-default-rtdb.firebaseio.com",
+  projectId: "mrt-class-6264c",
+  storageBucket: "mrt-class-6264c.firebasestorage.app",
+  messagingSenderId: "542139103880",
+  appId: "1:542139103880:web:a8d6f9bdda79024aee3d3d",
+  measurementId: "G-YRLLTYWVDR"
+};
+
+let firebaseOk = false;
+let app, db;
+
+function tryInitFirebase(){
+  try{
+    if (!FIREBASE_CONFIG || (FIREBASE_CONFIG.apiKey||"").includes("PASTE_")) {
+      setConn("Firebase not configured", false);
+      return;
+    }
+    app = firebase.initializeApp(FIREBASE_CONFIG);
+    db = firebase.database();
+    firebaseOk = true;
+    setConn("Connected", true);
+  } catch(e){
+    console.error(e);
+    setConn("Firebase error", false);
+  }
+}
+
+function setConn(text, ok){
+  const chip = document.getElementById("connChip");
+  chip.textContent = text;
+  chip.style.borderColor = ok ? "rgba(34,197,94,.45)" : "rgba(239,68,68,.45)";
+  chip.style.color = ok ? "rgba(34,197,94,.95)" : "rgba(239,68,68,.95)";
+}
+
+tryInitFirebase();
+
+/* =========================================================
+   GAME ENGINE (based on your uploaded HTML, refactored)
+   - Two boards: X and Y
+   - Shared dice per cycle
+   - No doubling cube (disabled)
+   - Turn assignment:
+       Cycle 0 (opening): board X starter determined by opening dice; board Y starter is the other player, using same dice.
+       Cycle 1: A plays on Y, B on X
+       Cycle 2: A plays on X, B on Y
+       ... alternates thereafter.
+   ========================================================= */
+
+let canvas, ctx;
+let mousePos;
+
+const UI = {
+  status: (html)=> document.getElementById("statusInfo").innerHTML = html,
+  who: (txt)=> document.getElementById("whoChip").textContent = txt,
+  view: (txt)=> document.getElementById("viewChip").textContent = "View: " + txt
+};
+
+function deepCopy(obj){ return JSON.parse(JSON.stringify(obj)); }
+
+function makeFreshBoard(){
+  const brd = {
+    // points
+    p24:[2,0], p23:[0,-1], p22:[0,-1], p21:[0,-1], p20:[0,-1], p19:[5,1],
+    p18:[0,-1], p17:[3,1], p16:[0,-1], p15:[0,-1], p14:[0,-1], p13:[5,0],
+    p12:[5,1],  p11:[0,-1], p10:[0,-1], p9:[0,-1],  p8:[3,0],  p7:[0,-1],
+    p6:[5,0],   p5:[0,-1],  p4:[0,-1],  p3:[0,-1],  p2:[0,-1],  p1:[2,1],
+    offWhite:[0,1], offBlack:[0,0], barWhite:[0,1], barBlack:[0,0],
+    status:"move",            // always "move" in this variant
+    onMove:"black",           // "black" or "white" (whose turn on this board for current cycle)
+    moves:[],                 // dice pips remaining
+    playedMoves:[],           // for undo
+    // undo backups:
+    b:{},
+    done:false,
+    mouseOverPoint: undefined,
+    mouseOver: undefined
+  };
+  return brd;
+}
+
+function boardSave(brd){
+  brd.b = {};
+  for (let i=1;i<=24;i++) brd.b["p"+i]= brd["p"+i].slice();
+  brd.b.offWhite = brd.offWhite.slice();
+  brd.b.offBlack = brd.offBlack.slice();
+  brd.b.barWhite = brd.barWhite.slice();
+  brd.b.barBlack = brd.barBlack.slice();
+  brd.b.moves = brd.moves.slice();
+}
+
+function boardUndo(brd){
+  if (!brd.b || !brd.b.p1) return;
+  for (let i=1;i<=24;i++) brd["p"+i]= brd.b["p"+i].slice();
+  brd.offWhite = brd.b.offWhite.slice();
+  brd.offBlack = brd.b.offBlack.slice();
+  brd.barWhite = brd.b.barWhite.slice();
+  brd.barBlack = brd.b.barBlack.slice();
+  brd.moves = brd.b.moves.slice();
+  brd.playedMoves = [];
+}
+
+// Dice shared for rendering convenience
+const Dices = { diceValueLeft: 5, diceValueRight: 5, onScreen:false, position:"" };
+
+// Buttons (kept minimal)
+let startButton = {onScreen:false};
+let rollButton = {onScreen:false}; // not used
+let takeButton = {onScreen:false}; // not used
+let passButton = {onScreen:false}; // not used
+let Cube = { position:"off", value:1, onScreen:false };
+
+// ---------- Valid moves ----------
+function ValidMoves(brd){
+  this.numOfValidMoves = function(){
+    let result = 0;
+    for (let k in this) if (typeof this[k] === "object") result += this[k].length;
+    return result;
+  };
+
+  const onMove = brd.onMove;
+  const playerCode = (onMove === "black") ? 0 : 1;
+
+  // if has men on bar
+  if (brd["bar"+cap(onMove)][0] > 0) {
+    this["bar"+cap(onMove)] = [];
+    for (let i=0;i<brd.moves.length;i++){
+      const mv = brd.moves[i];
+      if (isValid("bar"+cap(onMove), mv) && this["bar"+cap(onMove)].indexOf(mv) === -1) this["bar"+cap(onMove)].push(mv);
+    }
+  } else {
+    for (let i=1;i<=24;i++){
+      if (brd["p"+i][1] !== playerCode) continue;
+      this["p"+i] = [];
+      for (let j=0;j<brd.moves.length;j++){
+        const mv = brd.moves[j];
+        if (isValid("p"+i, mv) && this["p"+i].indexOf(mv) === -1) this["p"+i].push(mv);
+      }
+    }
+  }
+
+  function isValid(start, number){
+    let startPt, target;
+    if (start.charAt(0) === "b") startPt = (onMove === "black") ? 25 : 0;
+    else startPt = parseInt(start.substr(1),10);
+
+    target = (onMove === "black") ? startPt - number : startPt + number;
+
+    if (onMove === "black" && target <= 0) target = "offBlack";
+    else if (onMove === "white" && target >= 25) target = "offWhite";
+    else target = "p"+target;
+
+    if (target.charAt(0) === "p"){
+      if (brd[target][1] === -1) return true;
+      if (brd[start][1] === brd[target][1]) return true;
+      if (brd[target][0] > 1) return false;
+      return true;
+    } else {
+      // bear off rules
+      const shift = (onMove === "black") ? 6 : 0;
+      for (let i=1+shift; i<=18+shift; i++){
+        if (brd["p"+i][1] === playerCode) return false;
+      }
+      if (startPt === ((onMove === "black") ? number : 25-number)) return true;
+
+      if (onMove === "black"){
+        for (let i=startPt+1; i<=6; i++){
+          if (brd["p"+i][1] === playerCode) return false;
+        }
+      }
+      if (onMove === "white"){
+        for (let i=startPt-1; i>=19; i--){
+          if (brd["p"+i][1] === playerCode) return false;
+        }
+      }
+      return true;
+    }
+  }
+}
+
+// ---------- Move ----------
+function move(brd, start, target){
+  if (brd.playedMoves.length === 0) boardSave(brd);
+
+  if (target.charAt(0) === "o"){
+    brd["off"+cap(brd.onMove)][0]++;
+  } else if (brd[target][0] === 0){
+    brd[target][0]++;
+    brd[target][1] = brd[start][1];
+  } else if (brd[target][1] === brd[start][1]){
+    brd[target][0]++;
+  } else {
+    brd[target][1] = 1 - brd[target][1];
+    if (brd.onMove === "black") brd.barWhite[0]++; else brd.barBlack[0]++;
+  }
+
+  if (--brd[start][0] === 0 && start.charAt(0) === "p") brd[start][1] = -1;
+  brd.playedMoves.push(start+"/"+target);
+}
+
+// ---------- Rendering (unchanged style, but no cube / no roll / no take/pass) ----------
+function drawBoard(brd){
+  const boardBorderColor = "#663300";
+  const boardInnerColor = "#B88A00";
+  const triangleColor1 = "#ADAD85";
+  const triangleColor2 = "#FF471A";
+  const triangleBorderColor = "#444";
+  const blackCheckerColor = "#333";
+  const whiteCheckerColor = "#DDD";
+  const buttonBackgroundColor = "#FCBD00";
+  const buttonBorderColor = "#333";
+  const buttonTextColor = "#FD3200";
+  const blackDiceBodyColor = "#333";
+  const blackDiceDotColor = "#DDD";
+  const whiteDiceBodyColor = "#DDD";
+  const whiteDiceDotColor = "#333";
+
+  const w = Math.min(window.innerWidth-40, 900);
+  const h = w*3/4;
+  const p = 0.02;
+  canvas.width = w;
+  canvas.height = h;
+
+  // empty
+  ctx.save();
+  ctx.fillStyle = boardBorderColor;
+  ctx.fillRect(0,0,w,h);
+  ctx.fillStyle = boardInnerColor;
+  ctx.fillRect(w*p, h*p*2, w*p*3, h*p*20);
+  ctx.fillRect(w*p, h*p*28, w*p*3, h*p*20);
+  ctx.fillRect(w*p*46, h*p*2, w*p*3, h*p*20);
+  ctx.fillRect(w*p*46, h*p*28, w*p*3, h*p*20);
+  ctx.fillRect(w*p*5, h*p*2, w*p*18, h*p*46);
+  ctx.fillRect(w*p*27, h*p*2, w*p*18, h*p*46);
+
+  for (let i=0;i<=5;i++){
+    drawTriangle(5 + i*3, 2, 3, 20, i%2);
+    drawTriangle(5 + i*3, 48, 3, 20, (i+1)%2);
+    drawTriangle(27 + i*3, 2, 3, 20, i%2);
+    drawTriangle(27 + i*3, 48, 3, 20, (i+1)%2);
+  }
+  ctx.restore();
+
+  for (let i=1;i<=24;i++) drawPoint(i, brd["p"+i]);
+  drawCheckersOnBar();
+  drawCheckersBearedOff();
+  drawDiceArea();
+
+  // helpers
+  function drawTriangle(startx, starty, width, height, color){
+    let peak = (starty < 25) ? starty + height : starty - height;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(w*p*startx, h*p*starty);
+    ctx.lineTo(w*p*(startx + width/2), h*p*peak);
+    ctx.lineTo(w*p*(startx + width), h*p*starty);
+    ctx.fillStyle = (color===0) ? triangleColor1 : triangleColor2;
+    ctx.strokeStyle = triangleBorderColor;
+    ctx.fill(); ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawChecker(x,y,col,hl){
+    hl = !!hl;
+    let r = w*p*1.5;
+    ctx.save();
+    ctx.beginPath();
+    if (hl){ r*=1.05; ctx.shadowColor="#444"; ctx.shadowBlur=5; ctx.shadowOffsetX=r*0.2; ctx.shadowOffsetY=r*0.2; }
+    ctx.arc(x,y,r*0.99,0,2*Math.PI);
+    ctx.fillStyle = col; ctx.fill();
+    ctx.restore();
+    ctx.stroke();
+  }
+
+  function drawPoint(j, point){
+    if (point[1]===-1 || point[0]===0) return;
+    const color = (point[1]===0) ? blackCheckerColor : whiteCheckerColor;
+    let centerx=0, centery=0;
+    const numCheckers = Math.min(point[0], 5);
+
+    for (let i=0;i<numCheckers;i++){
+      if (j>=19){
+        centerx = w*p*(28.5 + (j-19)*3);
+        centery = 2*h*p + 1.5*w*p + i*3*w*p;
+      } else if (j>=13){
+        centerx = w*p*(6.5 + (j-13)*3);
+        centery = 2*h*p + 1.5*w*p + i*3*w*p;
+      } else if (j>=7){
+        centerx = w*p*(6.5 + (12-j)*3);
+        centery = 48*h*p - 1.5*w*p - i*3*w*p;
+      } else {
+        centerx = w*p*(28.5 + (6-j)*3);
+        centery = 48*h*p - 1.5*w*p - i*3*w*p;
+      }
+      const hl = (j===brd.mouseOverPoint && i===numCheckers-1 && isInteractive() && point[1]===(brd.onMove==="black"?0:1));
+      drawChecker(centerx, centery, color, hl);
+    }
+
+    if (point[0] > 5){
+      ctx.save();
+      ctx.fillStyle = (color===blackCheckerColor) ? whiteCheckerColor : blackCheckerColor;
+      ctx.font = (w*p*1.8) + "px Arial";
+      ctx.textBaseline="middle"; ctx.textAlign="center";
+      ctx.fillText(point[0].toString(), centerx, centery);
+      ctx.restore();
+    }
+  }
+
+  function drawCheckersOnBar(){
+    const x = w*p*25;
+    for (let i=0;i<brd.barBlack[0];i++){
+      const y = h*p*18 - i*w*p*3;
+      drawChecker(x,y,blackCheckerColor, (brd.mouseOver==="barBlack" && i===brd.barBlack[0]-1 && isInteractive() && brd.onMove==="black"));
+    }
+    for (let i=0;i<brd.barWhite[0];i++){
+      const y = h*p*32 + i*w*p*3;
+      drawChecker(x,y,whiteCheckerColor, (brd.mouseOver==="barWhite" && i===brd.barWhite[0]-1 && isInteractive() && brd.onMove==="white"));
+    }
+  }
+
+  function drawCheckersBearedOff(){
+    ctx.save();
+    ctx.fillStyle = blackCheckerColor;
+    ctx.lineWidth = 2;
+    for (let i=1;i<=brd.offBlack[0];i++){
+      ctx.fillRect(w*p*46, h*p*(48 - i*4/3), w*p*3, h*p*4/3);
+      ctx.strokeRect(w*p*46, h*p*(48 - i*4/3), w*p*3, h*p*4/3);
+    }
+    ctx.fillStyle = whiteCheckerColor;
+    for (let i=0;i<brd.offWhite[0];i++){
+      ctx.fillRect(w*p*46, h*p*(2 + i*4/3), w*p*3, h*p*4/3);
+      ctx.strokeRect(w*p*46, h*p*(2 + i*4/3), w*p*3, h*p*4/3);
+    }
+    ctx.restore();
+  }
+
+  function roundRect(ctx,x,y,width,height,radius,fill,stroke){
+    stroke = (typeof stroke==="undefined") ? true : stroke;
+    if (typeof radius==="number") radius={tl:radius,tr:radius,br:radius,bl:radius};
+    const def={tl:0,tr:0,br:0,bl:0};
+    for (let s in def) radius[s]=radius[s]||def[s];
+    ctx.beginPath();
+    ctx.moveTo(x+radius.tl,y);
+    ctx.lineTo(x+width-radius.tr,y);
+    ctx.quadraticCurveTo(x+width,y,x+width,y+radius.tr);
+    ctx.lineTo(x+width,y+height-radius.br);
+    ctx.quadraticCurveTo(x+width,y+height,x+width-radius.br,y+height);
+    ctx.lineTo(x+radius.bl,y+height);
+    ctx.quadraticCurveTo(x,y+height,x,y+height-radius.bl);
+    ctx.lineTo(x,y+radius.tl);
+    ctx.quadraticCurveTo(x,y,x+radius.tl,y);
+    ctx.closePath();
+    if (fill) ctx.fill();
+    if (stroke) ctx.stroke();
+  }
+
+  function drawDice(ctx,x,y,size,value,diceColor,dotColor){
+    const dots=[];
+    ctx.save();
+    ctx.fillStyle=diceColor;
+    ctx.translate(x,y);
+    roundRect(ctx,0,0,size,size,size*0.1,true,false);
+    const padding=0.25;
+    let xx=padding*size, yy=padding*size;
+    dots.push({x:xx,y:yy});
+    yy=size*0.5; dots.push({x:xx,y:yy});
+    yy=size*(1-padding); dots.push({x:xx,y:yy});
+    xx=size*0.5; yy=size*0.5; dots.push({x:xx,y:yy});
+    xx=size*(1-padding); yy=padding*size; dots.push({x:xx,y:yy});
+    yy=size*0.5; dots.push({x:xx,y:yy});
+    yy=size*(1-padding); dots.push({x:xx,y:yy});
+
+    let drawIdx=[];
+    if (value===1) drawIdx=[3];
+    else if (value===2) drawIdx=[0,6];
+    else if (value===3) drawIdx=[0,3,6];
+    else if (value===4) drawIdx=[0,2,4,6];
+    else if (value===5) drawIdx=[0,2,3,4,6];
+    else if (value===6) drawIdx=[0,1,2,4,5,6];
+
+    ctx.fillStyle=dotColor;
+    for (let i=0;i<drawIdx.length;i++){
+      const j=drawIdx[i];
+      ctx.beginPath();
+      ctx.arc(dots[j].x, dots[j].y, size*0.07, 0, 2*Math.PI);
+      ctx.fill();
+    }
+    ctx.restore();
+  }
+
+  function drawDiceArea(){
+    // draw two dice where original game did, depending on onMove
+    const x0 = (brd.onMove==="black") ? w*p*35.5 - h*p*4 : w*p*14.5;
+    const y0 = h*p*23;
+    Dices.position = (brd.onMove==="black") ? "right" : "left";
+    const diceColor = (brd.onMove==="black") ? blackDiceBodyColor : whiteDiceBodyColor;
+    const dotColor  = (brd.onMove==="black") ? blackDiceDotColor : whiteDiceDotColor;
+
+    drawDice(ctx, x0, y0, h*p*4, Dices.diceValueLeft, diceColor, dotColor);
+    const x1 = (brd.onMove==="black") ? x0 + h*p*4 + w*p : x0 - h*p*4 - w*p;
+    drawDice(ctx, x1, y0, h*p*4, Dices.diceValueRight, diceColor, dotColor);
+
+    // subtle "END" tag when you can end turn
+    const valids = new ValidMoves(brd);
+    const canEnd = isInteractive() && (brd.moves.length===0 || valids.numOfValidMoves()===0);
+    if (canEnd){
+      ctx.save();
+      ctx.fillStyle="rgba(245,158,11,.9)";
+      ctx.font = "bold " + (h*p*2.2) + "px Arial";
+      ctx.textAlign="center";
+      ctx.textBaseline="bottom";
+      ctx.fillText("CLICK DICE TO END TURN", w*0.5, h*p*22.3);
+      ctx.restore();
+    }
+  }
+}
+
+// ---------- Mouse hit-testing (adapted) ----------
+function getMousePosForBoard(brd, canvas, evt){
+  const rect = canvas.getBoundingClientRect();
+  const w = canvas.width, h = canvas.height, p=0.02;
+  const result = { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
+  result.xp = parseFloat(result.x / w * 50).toFixed(2);
+  result.yp = parseFloat(result.y / h * 50).toFixed(2);
+  let pt=0;
+
+  if (result.xp > 27 && result.xp < 45 && result.yp > 2 && result.yp < 22) pt = Math.floor((result.xp - 27) / 3) + 19;
+  else if (result.xp > 5 && result.xp < 23 && result.yp > 2 && result.yp < 22) pt = Math.floor((result.xp - 5) / 3) + 13;
+  else if (result.xp > 5 && result.xp < 23 && result.yp > 28 && result.yp < 48) pt = 12 - Math.floor((result.xp - 5) / 3);
+  else if (result.xp > 27 && result.xp < 45 && result.yp > 28 && result.yp < 48) pt = 6 - Math.floor((result.xp - 27) / 3);
+
+  if (pt!==0) result.point = "p"+pt;
+  else if (result.xp > 46 && result.xp < 49 && result.yp > 2 && result.yp < 22) result.point = "offWhite";
+  else if (result.xp > 46 && result.xp < 49 && result.yp > 28 && result.yp < 48) result.point = "offBlack";
+  else if (brd.barBlack[0] > 0 && result.xp > 23.5 && result.xp < 26.5 && result.y < h*p*18 + w*p*1.5 && result.y > h*p*18 - w*p*3*(brd.barBlack[0] - 0.5)) result.point = "barBlack";
+  else if (brd.barWhite[0] > 0 && result.xp > 23.5 && result.xp < 26.5 && result.y > h*p*32 - w*p*1.5 && result.y < h*p*32 + w*p*3*(brd.barWhite[0] - 0.5)) result.point = "barWhite";
+  else {
+    // dice area
+    if (Dices.position==="right" && result.xp > 32.5 && result.xp < 39.5 && result.yp > 23 && result.yp < 27) result.point="Dices";
+    if (Dices.position==="left"  && result.xp > 10.5 && result.xp < 17.5 && result.yp > 23 && result.yp < 27) result.point="Dices";
+  }
+  return result;
+}
+
+/* =========================================================
+   MULTI-DEVICE STATE (Realtime Database)
+   ========================================================= */
+
+let roomRef = null;
+let roomId = "";
+let myRole = "S";   // "A" | "B" | "S"
+let myViewBoardKey = "X"; // what I’m currently viewing
+let cachedState = null;
+let unsub = null;
+
+function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+function defaultRoomState(){
+  return {
+    version: 1,
+    createdAt: Date.now(),
+    opening: { done:false, aWonX: null }, // aWonX: true/false
+    cycle: 0,          // 0 = opening, then 1,2,3...
+    dice: { left: 6, right: 1 }, // rendered left/right (max/min like original opening)
+    boards: { X: makeFreshBoard(), Y: makeFreshBoard() },
+    finished: { A:false, B:false }, // finished their move THIS cycle
+    assignment: { A:"X", B:"Y" },    // which board each player plays THIS cycle (opening will set)
+    completed: { X:false, Y:false },
+    lastMsg: "Room initialised."
+  };
+}
+
+function normalizeDice(a,b){
+  return (a>=b) ? {left:a,right:b} : {left:b,right:a};
+}
+
+function movesFromDice(d){
+  const a=d.left, b=d.right;
+  const arr=[a,b];
+  if (a===b){ arr.push(a,b); }
+  arr.sort((x,y)=>x-y);
+  return arr;
+}
+
+function setAssignmentsForCycle(state){
+  if (state.cycle===0){
+    // opening assignment already derived (starter per board)
+    return state;
+  }
+  // Spec: after opening, Cycle 1: A plays Y, B plays X. Then alternate.
+  const odd = (state.cycle % 2) === 1;
+  state.assignment = odd ? {A:"Y", B:"X"} : {A:"X", B:"Y"};
+  return state;
+}
+
+function onMoveColorFor(role){
+  return (role==="A") ? "black" : "white";
+}
+
+function setBoardOnMoveFromAssignment(state){
+  // set onMove and moves for each board based on assignment and current dice, unless completed.
+  for (const key of ["X","Y"]){
+    const brd = state.boards[key];
+    brd.done = !!state.completed[key];
+    if (brd.done){
+      brd.moves = [];
+      continue;
+    }
+    const playerOnThisBoard = (state.assignment.A===key) ? "A" : "B";
+    brd.onMove = (playerOnThisBoard==="A") ? "black" : "white";
+    brd.status = "move";
+    brd.moves = movesFromDice(state.dice);
+    brd.playedMoves = [];
+    brd.b = {};
+  }
+  return state;
+}
+
+function markCompletionIfAny(state){
+  // if 15 borne off for a color, mark board completed
+  for (const key of ["X","Y"]){
+    if (state.completed[key]) continue;
+    const brd = state.boards[key];
+    if (brd.offBlack[0]===15 || brd.offWhite[0]===15){
+      state.completed[key] = true;
+      brd.done = true;
+      brd.moves = [];
+    }
+  }
+  return state;
+}
+
+function computeMyTurnInfo(state){
+  if (myRole!=="A" && myRole!=="B") return {canAct:false, myBoard:null};
+  const myBoard = state.assignment[myRole];
+  const canAct = !state.finished[myRole] && !state.completed[myBoard];
+  return {canAct, myBoard};
+}
+
+function isInteractive(){
+  // whether current view board is the one I should act on AND not finished
+  if (!cachedState) return false;
+  const info = computeMyTurnInfo(cachedState);
+  if (!info.canAct) return false;
+  return myViewBoardKey === info.myBoard;
+}
+
+function setUndoEnabled(enabled){
+  document.getElementById("undoButton").disabled = !enabled;
+}
+
+function setView(boardKey){
+  myViewBoardKey = boardKey;
+  UI.view(boardKey==="X" ? "Board X" : "Board Y");
+  render();
+}
+
+function render(){
+  if (!cachedState){
+    UI.status(`<div class="muted">Join a room to begin.</div>`);
+    return;
+  }
+  const state = cachedState;
+  const brd = state.boards[myViewBoardKey];
+
+  // update dice values for rendering (shared)
+  Dices.diceValueLeft = state.dice.left;
+  Dices.diceValueRight = state.dice.right;
+
+  // compute statuses
+  const info = computeMyTurnInfo(state);
+  const myBoard = info.myBoard;
+  const canAct = info.canAct;
+
+  // draw
+  drawBoard(brd);
+
+  // status panel
+  const completedText = state.completed.X && state.completed.Y ? `<span class="ok">Both boards completed.</span>` :
+                        (state.completed.X || state.completed.Y) ? `<span class="warn">One board completed.</span>` :
+                        `<span class="muted">Both boards in play.</span>`;
+
+  const who = (myRole==="A") ? "Player A (Black)" : (myRole==="B") ? "Player B (White)" : "Spectator";
+  UI.who(who);
+
+  let turnLine = "";
+  if (myRole==="S"){
+    turnLine = `<div class="muted">Spectating. Player A is Black; Player B is White.</div>`;
+  } else if (canAct){
+    turnLine = (myViewBoardKey===myBoard)
+      ? `<div class="ok">Your turn on <strong>Board ${myBoard}</strong>. Use the shared dice: <strong>${state.dice.left}</strong> and <strong>${state.dice.right}</strong>.</div>`
+      : `<div class="warn">Your turn on <strong>Board ${myBoard}</strong>. You are currently viewing <strong>Board ${myViewBoardKey}</strong> (waiting view).</div>`;
+  } else {
+    const other = (myRole==="A") ? "B" : "A";
+    const otherBoard = state.assignment[other];
+    turnLine = `<div class="muted">Waiting for the other player to finish on <strong>Board ${otherBoard}</strong>…</div>`;
+  }
+
+  const cycleLine = (state.cycle===0)
+    ? `<div>Opening cycle (special start): Board X starter depends on opening dice; Board Y starter is the other player.</div>`
+    : `<div>Cycle <strong>${state.cycle}</strong>: A plays <strong>${state.assignment.A}</strong>, B plays <strong>${state.assignment.B}</strong> (boards swap each cycle).</div>`;
+
+  UI.status(`
+    ${turnLine}
+    <div class="hr"></div>
+    ${cycleLine}
+    <div>Dice: <strong>${state.dice.left}</strong> &amp; <strong>${state.dice.right}</strong></div>
+    <div>Board X: ${state.completed.X ? '<span class="ok">completed</span>' : 'in play'} &nbsp;|&nbsp; Board Y: ${state.completed.Y ? '<span class="ok">completed</span>' : 'in play'}</div>
+    <div class="muted" style="margin-top:8px;">${state.lastMsg||""}</div>
+    <div style="margin-top:8px;">${completedText}</div>
+  `);
+
+  // undo availability
+  const undoOk = isInteractive() && brd.playedMoves.length>0;
+  setUndoEnabled(undoOk);
+}
+
+/* =========================================================
+   ROOM FLOW
+   ========================================================= */
+function ensureRoom(roomId){
+  const ref = db.ref("dualBackgammonRooms/"+roomId);
+  return ref.get().then(snap=>{
+    if (!snap.exists()){
+      const state = defaultRoomState();
+      // opening roll: determine who starts on board X; same dice but reversed starter on Y.
+      let r1=0,r2=0;
+      while (r1===r2){ r1 = Math.floor(Math.random()*6)+1; r2 = Math.floor(Math.random()*6)+1; }
+      const dice = normalizeDice(r1,r2);
+      state.dice = dice;
+      // A wins X if their die > other (we assign A=black, B=white)
+      state.opening.done = true;
+      state.opening.aWonX = (r1>r2); // because we treat first roll comparison, but dice normalized; use original r1/r2
+      // board X starter
+      state.assignment = state.opening.aWonX ? {A:"X", B:"Y"} : {A:"Y", B:"X"};
+      // On board Y starter is the other player with same dice (already implied by assignment above)
+      state.finished = {A:false, B:false};
+      setBoardOnMoveFromAssignment(state);
+      state.lastMsg = `Opening roll: ${dice.left} and ${dice.right}. Board X starts with ` + (state.opening.aWonX ? "Player A (Black)" : "Player B (White)") + `; Board Y starts with the other player.`;
+      return ref.set(state).then(()=>ref);
+    }
+    return ref;
+  });
+}
+
+function subscribeRoom(){
+  if (!roomRef) return;
+  roomRef.on("value", snap=>{
+    cachedState = snap.val();
+    // keep view sensible: if it's my turn, show my board; else show the other board (as requested)
+    if (cachedState && (myRole==="A" || myRole==="B")){
+      const info = computeMyTurnInfo(cachedState);
+      if (info.canAct){
+        setView(info.myBoard);
+      } else {
+        const otherBoard = (myRole==="A") ? cachedState.assignment.B : cachedState.assignment.A;
+        setView(otherBoard);
+      }
+    } else if (cachedState){
+      // spectator: default X
+      setView(myViewBoardKey || "X");
+    }
+    render();
+  });
+}
+
+/* =========================================================
+   TURN END + AUTO ROLL
+   ========================================================= */
+function maybeAutoAdvance(state){
+  // called after a player ends a turn; if both finished, roll new dice and advance cycle.
+  if (!(state.finished.A && state.finished.B)) return state;
+  // if both boards completed -> keep finished true and stop
+  if (state.completed.X && state.completed.Y){
+    state.lastMsg = "Both boards are complete. Game over.";
+    return state;
+  }
+
+  // advance cycle
+  state.cycle = (state.cycle || 0) + 1;
+
+  // roll dice
+  const r1 = Math.floor(Math.random()*6)+1;
+  const r2 = Math.floor(Math.random()*6)+1;
+  state.dice = normalizeDice(r1,r2);
+
+  // swap assignments for cycle>=1 as per spec
+  setAssignmentsForCycle(state);
+
+  // reset finished flags
+  state.finished = {A:false, B:false};
+
+  // reset boards onMove/moves
+  setBoardOnMoveFromAssignment(state);
+
+  state.lastMsg = `New dice: ${state.dice.left} and ${state.dice.right}. Cycle ${state.cycle}: A plays ${state.assignment.A}, B plays ${state.assignment.B}.`;
+  return state;
+}
+
+function endMyTurn(){
+  if (!firebaseOk || !roomRef || !cachedState) return;
+  if (myRole!=="A" && myRole!=="B") return;
+
+  const info = computeMyTurnInfo(cachedState);
+  if (!info.canAct) return;
+
+  // transaction to mark finished and maybe advance
+  roomRef.transaction(state=>{
+    if (!state) return state;
+    // if I already finished in db, do nothing
+    if (state.finished && state.finished[myRole]) return state;
+
+    // mark completion if happened just now
+    state = markCompletionIfAny(state);
+
+    // if my assigned board is completed, allow auto-finish anyway
+    state.finished[myRole] = true;
+
+    // auto advance if both finished
+    state = maybeAutoAdvance(state);
+    return state;
+  });
+}
+
+/* =========================================================
+   PLAYER MOVE HANDLING (writes board deltas to DB)
+   ========================================================= */
+function applyMoveToRoom(startPt){
+  if (!firebaseOk || !roomRef || !cachedState) return;
+  const state = cachedState;
+  const info = computeMyTurnInfo(state);
+  if (!info.canAct) return;
+  if (myViewBoardKey !== info.myBoard) return;
+
+  const boardKey = info.myBoard;
+
+  roomRef.transaction(s=>{
+    if (!s) return s;
+    if (s.finished[myRole]) return s;
+    if (s.completed[boardKey]) return s;
+
+    const brd = s.boards[boardKey];
+
+    // enforce it's correct onMove
+    const expectedColor = (myRole==="A") ? "black" : "white";
+    if (brd.onMove !== expectedColor) return s;
+
+    // build valids
+    const valids = new ValidMoves(brd);
+
+    // clicks on points/bars only
+    const mp = startPt;
+    if (!mp || (!mp.point)) return s;
+
+    if (mp.point.charAt(0)==="p" || mp.point.charAt(0)==="b"){
+      if (brd[mp.point][1] !== (expectedColor==="black"?0:1)){
+        s.lastMsg = "That is not your checker.";
+        return s;
+      }
+      if (brd.moves.length===0){
+        s.lastMsg = "No moves left. Click the dice to end your turn.";
+        return s;
+      }
+      const start = mp.point;
+      if (!valids.hasOwnProperty(start) || valids[start].length===0){
+        s.lastMsg = "No valid moves from that point.";
+        return s;
+      }
+      const stpt = (start.charAt(0)==="p") ? parseInt(start.substr(1),10) : (expectedColor==="black" ? 25 : 0);
+      const currentMove = (valids[start].length>1) ? s.dice.left : valids[start][0]; // mimic original heuristic
+      let tgpt = (expectedColor==="black") ? stpt - currentMove : stpt + currentMove;
+      let target;
+      if (expectedColor==="black" && tgpt < 1) target = "offBlack";
+      else if (expectedColor==="white" && tgpt > 24) target = "offWhite";
+      else target = "p"+tgpt;
+
+      // save snapshot on first move
+      if (!brd.playedMoves || brd.playedMoves.length===0){
+        boardSave(brd);
+      }
+
+      move(brd, start, target);
+      // remove move pip
+      const idx = brd.moves.indexOf(currentMove);
+      if (idx>=0) brd.moves.splice(idx,1);
+
+      // update last msg
+      s.lastMsg = `Board ${boardKey}: ${cap(expectedColor)} moved ${start}/${target}.`;
+
+      // check completion
+      s = markCompletionIfAny(s);
+
+      return s;
+    }
+
+    if (mp.point==="Dices"){
+      const v = new ValidMoves(brd);
+      if (v.numOfValidMoves()>0){
+        // swap dice order (UI convenience)
+        const t = s.dice.left; s.dice.left = s.dice.right; s.dice.right = t;
+        // also update moves ordering for heuristic consistency
+        // (keep brd.moves sorted ascending, as in original)
+        brd.moves.sort((a,b)=>a-b);
+        s.lastMsg = `Dice order swapped: ${s.dice.left} and ${s.dice.right}.`;
+        return s;
+      }
+      if (v.numOfValidMoves()===0){
+        // end turn (but only if no valid moves OR moves empty)
+        s.lastMsg = `Board ${boardKey}: ${cap(expectedColor)} ended their turn.`;
+        s.finished[myRole] = true;
+        s = maybeAutoAdvance(s);
+        return s;
+      }
+    }
+
+    return s;
+  });
+}
+
+/* =========================================================
+   INPUT EVENTS
+   ========================================================= */
+function handleMousemove(evt){
+  if (!cachedState) return;
+  const brd = cachedState.boards[myViewBoardKey];
+  const mp = getMousePosForBoard(brd, canvas, evt);
+  brd.mouseOverPoint = (mp.point && mp.point.charAt(0)==="p") ? parseInt(mp.point.substr(1),10) : undefined;
+  brd.mouseOver = (mp.point==="barBlack"||mp.point==="barWhite") ? mp.point : undefined;
+  // purely local hover; do not write to DB
+  drawBoard(brd);
+}
+
+function handleMouseclick(evt){
+  if (!cachedState) return;
+  const brd = cachedState.boards[myViewBoardKey];
+  const mp = getMousePosForBoard(brd, canvas, evt);
+
+  // If I'm interactive, apply move/ dice actions to DB
+  if (isInteractive()){
+    applyMoveToRoom(mp);
+  }
+}
+
+/* =========================================================
+   INIT UI
+   ========================================================= */
+function init(){
+  canvas = document.getElementById("myCanvas");
+  ctx = canvas.getContext("2d");
+
+  canvas.addEventListener("mousemove", handleMousemove);
+  canvas.addEventListener("click", handleMouseclick);
+
+  document.getElementById("joinBtn").onclick = async ()=>{
+    if (!firebaseOk){
+      alert("Firebase is not configured. Paste your config in the HTML first.");
+      return;
+    }
+    roomId = (document.getElementById("roomId").value || "").trim();
+    if (!roomId){
+      alert("Enter a room code.");
+      return;
+    }
+    myRole = document.getElementById("role").value;
+    // create/ensure room
+    roomRef = await ensureRoom(roomId);
+    // subscribe
+    roomRef.off();
+    subscribeRoom();
+    render();
+  };
+
+  document.getElementById("undoButton").onclick = ()=>{
+    if (!firebaseOk || !roomRef || !cachedState) return;
+    if (!isInteractive()) return;
+    const boardKey = myViewBoardKey;
+    roomRef.transaction(s=>{
+      if (!s) return s;
+      if (s.finished[myRole]) return s;
+      const brd = s.boards[boardKey];
+      if (!brd || !brd.b) return s;
+      boardUndo(brd);
+      s.lastMsg = `Board ${boardKey}: Undo.`;
+      return s;
+    });
+  };
+
+  document.getElementById("resetButton").onclick = ()=>{
+    if (!firebaseOk){
+      alert("Firebase is not configured.");
+      return;
+    }
+    const r = (document.getElementById("roomId").value || "").trim();
+    if (!r){
+      alert("Enter the room code you want to reset.");
+      return;
+    }
+    const ref = db.ref("dualBackgammonRooms/"+r);
+    const st = defaultRoomState();
+
+    // opening roll again:
+    let r1=0,r2=0;
+    while (r1===r2){ r1 = Math.floor(Math.random()*6)+1; r2 = Math.floor(Math.random()*6)+1; }
+    st.dice = normalizeDice(r1,r2);
+    st.opening.done = true;
+    st.opening.aWonX = (r1>r2);
+    st.assignment = st.opening.aWonX ? {A:"X", B:"Y"} : {A:"Y", B:"X"};
+    setBoardOnMoveFromAssignment(st);
+    st.lastMsg = `Room reset. Opening roll: ${st.dice.left} and ${st.dice.right}. Board X starts with ` + (st.opening.aWonX ? "Player A (Black)" : "Player B (White)") + `.`;
+
+    ref.set(st);
+  };
+
+  // initial blank render
+  UI.status(`<div class="muted">Enter a room code, choose Player A / Player B, and click <strong>Join</strong>.</div>`);
+}
+
+window.addEventListener("resize", ()=>render());
+init();
+</script>
+</body>
+</html>
