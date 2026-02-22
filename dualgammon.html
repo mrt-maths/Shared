@@ -442,6 +442,32 @@ function drawBoard(brd, boardKey){
   }
   ctx.restore();
 
+  // Board label (X/Y) at top-centre, always upright
+  (function(){
+    const label = boardKey;
+    ctx.save();
+    // If flipped, temporarily undo flip to keep text upright
+    if (flipped){
+      ctx.restore();
+      ctx.save();
+    }
+    ctx.font = `bold ${Math.max(28, Math.round(w*0.06))}px system-ui, Arial`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(255,255,255,0.85)";
+    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.lineWidth = Math.max(2, Math.round(w*0.006));
+    ctx.strokeText(label, w/2, h*0.01);
+    ctx.fillText(label, w/2, h*0.01);
+    ctx.restore();
+    // If flipped, re-apply flip transform for remainder of draw
+    if (flipped){
+      ctx.save();
+      ctx.translate(w, h);
+      ctx.rotate(Math.PI);
+    }
+  })();
+
   for (let i=1;i<=24;i++) drawPoint(i, brd["p"+i]);
   drawCheckersOnBar();
   drawCheckersBearedOff();
@@ -638,16 +664,32 @@ function drawBoard(brd, boardKey){
 }
 
 // ---------- Mouse hit-testing (adapted) ----------
+
+function getEventPoint(evt, rect){
+  // Supports MouseEvent, PointerEvent, TouchEvent
+  if (evt.touches && evt.touches.length){
+    return { clientX: evt.touches[0].clientX, clientY: evt.touches[0].clientY };
+  }
+  if (evt.changedTouches && evt.changedTouches.length){
+    return { clientX: evt.changedTouches[0].clientX, clientY: evt.changedTouches[0].clientY };
+  }
+  return { clientX: evt.clientX, clientY: evt.clientY };
+}
+
 function getMousePosForBoard(brd, canvas, evt){
   const rect = canvas.getBoundingClientRect();
   const dispW = rect.width || canvas.width;
   const dispH = rect.height || canvas.height;
 
+  const ep = getEventPoint(evt, rect);
   // raw pointer in displayed pixels
-  let x = evt.clientX - rect.left;
-  let y = evt.clientY - rect.top;
+  let x = (ep.clientX - rect.left);
+  let y = (ep.clientY - rect.top);
 
-  // flip view for Player B
+  // Guard: if event point is missing, return empty
+  if (!isFinite(x) || !isFinite(y)) return { x:0, y:0 };
+
+  // flip view for Player B (hit-test must match rotated draw)
   if (isFlippedView()){
     x = dispW - x;
     y = dispH - y;
@@ -670,13 +712,13 @@ function getMousePosForBoard(brd, canvas, evt){
   else if (xp > 46 && xp < 49 && yp > 2 && yp < 22) result.point = "offWhite";
   else if (xp > 46 && xp < 49 && yp > 28 && yp < 48) result.point = "offBlack";
   else {
-    // bar hit-tests need actual canvas pixel scale; approximate with displayed size & same p ratio
+    // bar hit-tests (use displayed pixel coords)
     const p = 0.02;
     const h = dispH, w = dispW;
     if (brd.barBlack[0] > 0 && xp > 23.5 && xp < 26.5 && y < h*p*18 + w*p*1.5 && y > h*p*18 - w*p*3*(brd.barBlack[0] - 0.5)) result.point = "barBlack";
     else if (brd.barWhite[0] > 0 && xp > 23.5 && xp < 26.5 && y > h*p*32 - w*p*1.5 && y < h*p*32 + w*p*3*(brd.barWhite[0] - 0.5)) result.point = "barWhite";
     else {
-      // dice area
+      // dice area (depends on draw position)
       if (Dices.position==="right" && xp > 32.5 && xp < 39.5 && yp > 23 && yp < 27) result.point="Dices";
       if (Dices.position==="left"  && xp > 10.5 && xp < 17.5 && yp > 23 && yp < 27) result.point="Dices";
     }
@@ -686,6 +728,7 @@ function getMousePosForBoard(brd, canvas, evt){
 
 /* =========================================================
    MULTI-DEVICE STATE (Realtime Database)
+
    ========================================================= */
 
 let roomRef = null;
@@ -912,6 +955,50 @@ function subscribeRoom(){
   });
 }
 
+
+// ---------- Presence (so room 514 can auto-refresh opening roll when nobody is connected) ----------
+function setupPresence(role){
+  if (!roomRef || (role!=="A" && role!=="B")) return;
+  const presRef = firebase.database().ref("dualBackgammonRooms/"+roomId+"/presence/"+role);
+  const connRef = firebase.database().ref(".info/connected");
+  connRef.on("value", snap=>{
+    if (snap.val() === true){
+      presRef.onDisconnect().set(false);
+      presRef.set(true);
+    }
+  });
+}
+
+function maybeReinitIfNoPlayers(){
+  if (!roomRef) return Promise.resolve();
+  return roomRef.transaction(s=>{
+    if (!s) return s;
+    const pres = (s.presence || {});
+    const aOn = !!pres.A;
+    const bOn = !!pres.B;
+
+    // If nobody is connected, treat next join as a new "session": fresh boards + new opening roll.
+    if (!aOn && !bOn){
+      const state = defaultRoomState();
+      let r1=0,r2=0;
+      while (r1===r2){ r1 = Math.floor(Math.random()*6)+1; r2 = Math.floor(Math.random()*6)+1; }
+      const dice = normalizeDice(r1,r2);
+      state.dice = dice;
+      state.opening.done = true;
+      state.opening.aWonX = (r1>r2);
+      state.assignment = state.opening.aWonX ? {A:"X", B:"Y"} : {A:"Y", B:"X"};
+      state.finished = {A:false, B:false};
+      setBoardOnMoveFromAssignment(state);
+      state.lastMsg = `Opening roll: ${dice.left} and ${dice.right}. Board X starts with ` + (state.opening.aWonX ? "Player A (Black)" : "Player B (White)") + `; Board Y starts with the other player.`;
+      // preserve presence object if it exists
+      state.presence = s.presence || {A:false, B:false};
+      return state;
+    }
+    return s;
+  }).then(()=>{});
+}
+
+
 /* =========================================================
    TURN END + AUTO ROLL
    ========================================================= */
@@ -999,6 +1086,7 @@ function applyMoveToRoom(startPt){
     // clicks on points/bars only
     const mp = startPt;
     if (!mp || (!mp.point)) return s;
+    s.lastMsg = `Board ${boardKey}: clicked ${mp.point}.`;
 
     if (mp.point.charAt(0)==="p" || mp.point.charAt(0)==="b"){
       if (brd[mp.point][1] !== (expectedColor==="black"?0:1)){
@@ -1073,7 +1161,7 @@ function handleMousemove(evt){
   const brd = cachedState.boards[myViewBoardKey];
   const mp = getMousePosForBoard(brd, canvas, evt);
   brd.mouseOverPoint = (mp.point && mp.point.charAt(0)==="p") ? parseInt(mp.point.substr(1),10) : undefined;
-  brd.mouseOver = (mp.point==="barBlack"||mp.point==="barWhite") ? mp.point : undefined;
+  brd.mouseOver = (mp.point==="barBlack"||mp.point==="barWhite") ? mp.point : null;
   // purely local hover; do not write to DB
   drawBoard(brd, myViewBoardKey);
 }
@@ -1100,6 +1188,8 @@ function init(){
 
   canvas.addEventListener("mousemove", handleMousemove);
   canvas.addEventListener("click", handleMouseclick);
+  canvas.addEventListener("pointerdown", (e)=>{ e.preventDefault(); handleMouseclick(e); }, {passive:false});
+  canvas.addEventListener("touchstart", (e)=>{ e.preventDefault(); handleMouseclick(e); }, {passive:false});
 
   document.getElementById("joinBtn").onclick = async ()=>{
     setStatus("Joining room 514…");
@@ -1116,6 +1206,8 @@ function init(){
 myRole = document.getElementById("role").value;
     // create/ensure room
     roomRef = await ensureRoom(roomId);
+    await maybeReinitIfNoPlayers();
+    setupPresence(myRole);
     setStatus(`Joined room ${roomId} as ${myRole}. Syncing…`);
 // subscribe
     roomRef.off();
