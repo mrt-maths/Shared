@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dual-Board Backgammon v1.8</title>
+  <title>Dual-Board Backgammon v1.9</title>
   <style>
     :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#f59e0b; --danger:#ef4444; --ok:#22c55e; }
     body{ margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:linear-gradient(180deg,#0b1023,#050814); color:var(--ink); }
@@ -523,8 +523,7 @@ function drawBoard(brd, boardKey){
 
   const flipped = isFlippedView();
 
-  // If flipped (Player B), mirror the board horizontally (left-right) so White sees from their side
-  // WITHOUT turning the board upside down.
+  // Player B (White): mirror horizontally so the view is from their side but not upside down.
   if (flipped){
     ctx.save();
     ctx.translate(w, 0);
@@ -549,6 +548,14 @@ function drawBoard(brd, boardKey){
     drawTriangle(27 + i*3, 48, 3, 20, (i+1)%2);
   }
   ctx.restore();
+
+  // Board label (X/Y) at top-centre, always upright
+  (function(){
+    const label = boardKey;
+    ctx.save();
+    // If flipped, temporarily undo flip to keep text upright
+    if (flipped){
+      ctx.restore();
       ctx.save();
     }
     ctx.font = `bold ${Math.max(28, Math.round(w*0.06))}px system-ui, Arial`;
@@ -742,6 +749,10 @@ function drawBoard(brd, boardKey){
   }
 
   // End flipped transform (if any)
+  if (flipped){
+    ctx.restore();
+  }
+
   // Large board label (X / Y) at top center (always upright)
   if (boardKey){
     ctx.save();
@@ -757,7 +768,6 @@ function drawBoard(brd, boardKey){
     ctx.restore();
   }
 
-
   // Restore after mirroring
   if (flipped){
     ctx.restore();
@@ -765,7 +775,7 @@ function drawBoard(brd, boardKey){
 
   // Board label (always upright)
   ctx.save();
-  ctx.font = "bold 48px system-ui, Segoe UI, Arial";
+  ctx.font = "bold 52px system-ui, Segoe UI, Arial";
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   ctx.fillStyle = "rgba(255,255,255,0.85)";
@@ -777,6 +787,7 @@ function drawBoard(brd, boardKey){
   ctx.restore();
 
 }
+
 
 // ---------- Mouse hit-testing (adapted) ----------
 
