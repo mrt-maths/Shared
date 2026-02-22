@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Dual-Board Backgammon (2 Devices)</title>
+  <title>Dual-Board Backgammon (2 Devices) - v1.3</title>
   <style>
     :root { --bg:#0f172a; --panel:#111827; --ink:#e5e7eb; --muted:#9ca3af; --accent:#f59e0b; --danger:#ef4444; --ok:#22c55e; }
     body{ margin:0; font-family:system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; background:linear-gradient(180deg,#0b1023,#050814); color:var(--ink); }
@@ -95,6 +95,13 @@
 
 <!-- Firebase (Realtime Database) - you must add your own config below -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js">
+
+// --- Safety fallback: ensure prepareForWrite always exists ---
+if (typeof window.prepareForWrite !== "function") {
+  window.prepareForWrite = function(v){ return v; };
+}
+
+
 
 // === Persist helpers (avoid undefined / transient UI state in RTDB) ===
 function sanitizeForFirebase(value) {
