@@ -391,7 +391,7 @@ function move(brd, start, target){
 }
 
 // ---------- Rendering (unchanged style, but no cube / no roll / no take/pass) ----------
-function drawBoard(brd){
+function drawBoard(brd, boardKey){
   const boardBorderColor = "#663300";
   const boardInnerColor = "#B88A00";
   const triangleColor1 = "#ADAD85";
@@ -412,6 +412,15 @@ function drawBoard(brd){
   const p = 0.02;
   canvas.width = w;
   canvas.height = h;
+
+  const flipped = isFlippedView();
+
+  // If flipped, draw the whole board rotated 180 degrees (so White sees from their side).
+  if (flipped){
+    ctx.save();
+    ctx.translate(w, h);
+    ctx.rotate(Math.PI);
+  }
 
   // empty
   ctx.save();
@@ -605,31 +614,72 @@ function drawBoard(brd){
       ctx.restore();
     }
   }
+
+  // End flipped transform (if any)
+  if (flipped){
+    ctx.restore();
+  }
+
+  // Large board label (X / Y) at top center (always upright)
+  if (boardKey){
+    ctx.save();
+    ctx.font = "700 48px system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "top";
+    ctx.fillStyle = "rgba(255,255,255,0.9)";
+    ctx.strokeStyle = "rgba(0,0,0,0.45)";
+    ctx.lineWidth = 6;
+    const label = String(boardKey);
+    ctx.strokeText(label, w/2, 10);
+    ctx.fillText(label, w/2, 10);
+    ctx.restore();
+  }
+
 }
 
 // ---------- Mouse hit-testing (adapted) ----------
 function getMousePosForBoard(brd, canvas, evt){
   const rect = canvas.getBoundingClientRect();
-  const w = canvas.width, h = canvas.height, p=0.02;
-  const result = { x: evt.clientX - rect.left, y: evt.clientY - rect.top };
-  result.xp = parseFloat(result.x / w * 50).toFixed(2);
-  result.yp = parseFloat(result.y / h * 50).toFixed(2);
-  let pt=0;
+  const dispW = rect.width || canvas.width;
+  const dispH = rect.height || canvas.height;
 
-  if (result.xp > 27 && result.xp < 45 && result.yp > 2 && result.yp < 22) pt = Math.floor((result.xp - 27) / 3) + 19;
-  else if (result.xp > 5 && result.xp < 23 && result.yp > 2 && result.yp < 22) pt = Math.floor((result.xp - 5) / 3) + 13;
-  else if (result.xp > 5 && result.xp < 23 && result.yp > 28 && result.yp < 48) pt = 12 - Math.floor((result.xp - 5) / 3);
-  else if (result.xp > 27 && result.xp < 45 && result.yp > 28 && result.yp < 48) pt = 6 - Math.floor((result.xp - 27) / 3);
+  // raw pointer in displayed pixels
+  let x = evt.clientX - rect.left;
+  let y = evt.clientY - rect.top;
 
-  if (pt!==0) result.point = "p"+pt;
-  else if (result.xp > 46 && result.xp < 49 && result.yp > 2 && result.yp < 22) result.point = "offWhite";
-  else if (result.xp > 46 && result.xp < 49 && result.yp > 28 && result.yp < 48) result.point = "offBlack";
-  else if (brd.barBlack[0] > 0 && result.xp > 23.5 && result.xp < 26.5 && result.y < h*p*18 + w*p*1.5 && result.y > h*p*18 - w*p*3*(brd.barBlack[0] - 0.5)) result.point = "barBlack";
-  else if (brd.barWhite[0] > 0 && result.xp > 23.5 && result.xp < 26.5 && result.y > h*p*32 - w*p*1.5 && result.y < h*p*32 + w*p*3*(brd.barWhite[0] - 0.5)) result.point = "barWhite";
+  // flip view for Player B
+  if (isFlippedView()){
+    x = dispW - x;
+    y = dispH - y;
+  }
+
+  const result = { x, y };
+  const xp = (x / dispW) * 50;
+  const yp = (y / dispH) * 50;
+  result.xp = xp.toFixed(2);
+  result.yp = yp.toFixed(2);
+
+  let pt = 0;
+
+  if (xp > 27 && xp < 45 && yp > 2 && yp < 22) pt = Math.floor((xp - 27) / 3) + 19;
+  else if (xp > 5 && xp < 23 && yp > 2 && yp < 22) pt = Math.floor((xp - 5) / 3) + 13;
+  else if (xp > 5 && xp < 23 && yp > 28 && yp < 48) pt = 12 - Math.floor((xp - 5) / 3);
+  else if (xp > 27 && xp < 45 && yp > 28 && yp < 48) pt = 6 - Math.floor((xp - 27) / 3);
+
+  if (pt !== 0) result.point = "p"+pt;
+  else if (xp > 46 && xp < 49 && yp > 2 && yp < 22) result.point = "offWhite";
+  else if (xp > 46 && xp < 49 && yp > 28 && yp < 48) result.point = "offBlack";
   else {
-    // dice area
-    if (Dices.position==="right" && result.xp > 32.5 && result.xp < 39.5 && result.yp > 23 && result.yp < 27) result.point="Dices";
-    if (Dices.position==="left"  && result.xp > 10.5 && result.xp < 17.5 && result.yp > 23 && result.yp < 27) result.point="Dices";
+    // bar hit-tests need actual canvas pixel scale; approximate with displayed size & same p ratio
+    const p = 0.02;
+    const h = dispH, w = dispW;
+    if (brd.barBlack[0] > 0 && xp > 23.5 && xp < 26.5 && y < h*p*18 + w*p*1.5 && y > h*p*18 - w*p*3*(brd.barBlack[0] - 0.5)) result.point = "barBlack";
+    else if (brd.barWhite[0] > 0 && xp > 23.5 && xp < 26.5 && y > h*p*32 - w*p*1.5 && y < h*p*32 + w*p*3*(brd.barWhite[0] - 0.5)) result.point = "barWhite";
+    else {
+      // dice area
+      if (Dices.position==="right" && xp > 32.5 && xp < 39.5 && yp > 23 && yp < 27) result.point="Dices";
+      if (Dices.position==="left"  && xp > 10.5 && xp < 17.5 && yp > 23 && yp < 27) result.point="Dices";
+    }
   }
   return result;
 }
@@ -729,6 +779,12 @@ function computeMyTurnInfo(state){
   return {canAct, myBoard};
 }
 
+
+function isFlippedView(){
+  // Player B (White) sees the board from their side
+  return myRole === "B";
+}
+
 function isInteractive(){
   // whether current view board is the one I should act on AND not finished
   if (!cachedState) return false;
@@ -765,7 +821,7 @@ function render(){
   const canAct = info.canAct;
 
   // draw
-  drawBoard(brd);
+  drawBoard(brd, myViewBoardKey);
 
   // status panel
   const completedText = state.completed.X && state.completed.Y ? `<span class="ok">Both boards completed.</span>` :
@@ -1019,7 +1075,7 @@ function handleMousemove(evt){
   brd.mouseOverPoint = (mp.point && mp.point.charAt(0)==="p") ? parseInt(mp.point.substr(1),10) : undefined;
   brd.mouseOver = (mp.point==="barBlack"||mp.point==="barWhite") ? mp.point : undefined;
   // purely local hover; do not write to DB
-  drawBoard(brd);
+  drawBoard(brd, myViewBoardKey);
 }
 
 function handleMouseclick(evt){
