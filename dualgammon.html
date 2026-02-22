@@ -94,7 +94,38 @@
 </div>
 
 <!-- Firebase (Realtime Database) - you must add your own config below -->
-<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js">
+
+// --- Firebase sanitiser (global) ---
+function sanitizeForFirebase(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+
+  const t = typeof value;
+
+  if (t === "number" || t === "string" || t === "boolean") return value;
+
+  if (Array.isArray(value)) {
+    return value.map(sanitizeForFirebase);
+  }
+
+  if (t === "object") {
+    const out = {};
+    for (const key in value) {
+      const v = value[key];
+      if (v === undefined) {
+        out[key] = null;
+      } else if (typeof v !== "function") {
+        out[key] = sanitizeForFirebase(v);
+      }
+    }
+    return out;
+  }
+
+  return null;
+}
+
+</script>
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
 
 <script>
