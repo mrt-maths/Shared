@@ -96,6 +96,60 @@
 <!-- Firebase (Realtime Database) - you must add your own config below -->
 <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js">
 
+// === Persist helpers (avoid undefined / transient UI state in RTDB) ===
+function sanitizeForFirebase(value) {
+  if (value === undefined) return null;
+  if (value === null) return null;
+  const t = typeof value;
+  if (t === "number" || t === "string" || t === "boolean") return value;
+  if (Array.isArray(value)) return value.map(sanitizeForFirebase);
+  if (t === "object") {
+    const out = {};
+    for (const k in value) {
+      const v = value[k];
+      if (v === undefined) out[k] = null;
+      else if (typeof v !== "function") out[k] = sanitizeForFirebase(v);
+    }
+    return out;
+  }
+  return null;
+}
+
+// Remove fields that should never be stored in Firebase (hover/cursor UI etc.)
+function stripTransientState(obj) {
+  // deep clone via structuredClone if available, fallback JSON (state is simple)
+  let copy;
+  try { copy = (typeof structuredClone === "function") ? structuredClone(obj) : JSON.parse(JSON.stringify(obj)); }
+  catch(e){ copy = JSON.parse(JSON.stringify(sanitizeForFirebase(obj))); }
+
+  try {
+    if (copy && copy.boards) {
+      ["X","Y"].forEach(b => {
+        if (!copy.boards[b]) return;
+        // common transient keys seen in older builds
+        delete copy.boards[b].mouseOver;
+        delete copy.boards[b].mouseOverPoint;
+        delete copy.boards[b].hover;
+        delete copy.boards[b].hoverPoint;
+        delete copy.boards[b].drag;
+        delete copy.boards[b].dragging;
+        delete copy.boards[b].draggingChecker;
+        delete copy.boards[b].selected;
+        delete copy.boards[b].selectedPoint;
+        delete copy.boards[b].cursor;
+        delete copy.boards[b].lastHit;
+      });
+    }
+  } catch(e) {}
+  return copy;
+}
+
+function prepareForWrite(value) {
+  return sanitizeForFirebase(stripTransientState(value));
+}
+
+
+
 // --- Firebase sanitiser (global) ---
 function sanitizeForFirebase(value) {
   if (value === undefined) return null;
@@ -160,6 +214,40 @@ function tryInitFirebase(){
     app = firebase.initializeApp(FIREBASE_CONFIG);
     
 
+
+
+
+// === Monkey-patch RTDB writes (set/update/transaction) to avoid undefined ===
+(function(){
+  try {
+    if (firebase && firebase.database && firebase.database.Reference && firebase.database.Reference.prototype) {
+      const proto = firebase.database.Reference.prototype;
+      if (!proto.__persist_patched__) {
+        const _set = proto.set;
+        const _update = proto.update;
+        const _transaction = proto.transaction;
+
+        proto.set = function(value, onComplete) {
+          return _set.call(this, prepareForWrite(value), onComplete);
+        };
+
+        proto.update = function(values, onComplete) {
+          return _update.call(this, prepareForWrite(values), onComplete);
+        };
+
+        proto.transaction = function(transactionUpdate, onComplete, applyLocally) {
+          const wrapped = function(currentData) {
+            const next = transactionUpdate(currentData);
+            return prepareForWrite(next);
+          };
+          return _transaction.call(this, wrapped, onComplete, applyLocally);
+        };
+
+        proto.__persist_patched__ = true;
+      }
+    }
+  } catch (e) { /* ignore */ }
+})();
 
 // --- Monkey-patch RTDB writes to always sanitize (self-contained) ---
 (function(){
@@ -266,7 +354,7 @@ function makeFreshBoard(){
     b:{},
     done:false,
     mouseOverPoint: null,
-    mouseOver: undefined
+    mouseOver: null
   };
   return brd;
 }
